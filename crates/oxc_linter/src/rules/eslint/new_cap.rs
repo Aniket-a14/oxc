@@ -1,4 +1,5 @@
-use lazy_regex::Regex;
+use lazy_regex::BytesRegex;
+use oxc_allocator::Allocator;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -9,13 +10,13 @@ use oxc_ast::{
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_span::Span;
-use oxc_str::CompactStr;
+use oxc_str::{CompactStr, JSStr, JSStrBuilder};
 
 use crate::{
     AstNode,
     context::LintContext,
     rule::{DefaultRuleConfig, Rule},
-    utils::deserialize_regex_option,
+    utils::deserialize_bytes_regex_option,
 };
 
 fn new_cap_diagnostic(span: Span, cap: &GetCapResult) -> OxcDiagnostic {
@@ -53,13 +54,15 @@ pub struct NewCapConfig {
     /// Exceptions to ignore for constructor names starting with an uppercase letter.
     new_is_cap_exceptions: Vec<CompactStr>,
     /// A regex pattern to match exceptions for constructor names starting with an uppercase letter.
-    #[serde(default, deserialize_with = "deserialize_regex_option")]
-    new_is_cap_exception_pattern: Option<Regex>,
+    #[serde(default, deserialize_with = "deserialize_bytes_regex_option")]
+    #[schemars(with = "Option<lazy_regex::Regex>")]
+    new_is_cap_exception_pattern: Option<BytesRegex>,
     /// Exceptions to ignore for functions with names starting with an uppercase letter.
     cap_is_new_exceptions: Vec<CompactStr>,
     /// A regex pattern to match exceptions for functions with names starting with an uppercase letter.
-    #[serde(default, deserialize_with = "deserialize_regex_option")]
-    cap_is_new_exception_pattern: Option<Regex>,
+    #[serde(default, deserialize_with = "deserialize_bytes_regex_option")]
+    #[schemars(with = "Option<lazy_regex::Regex>")]
+    cap_is_new_exception_pattern: Option<BytesRegex>,
     /// `true` to require capitalization for object properties (e.g., `new obj.Method()`).
     properties: bool,
 }
@@ -430,7 +433,7 @@ impl Rule for NewCap {
                     return;
                 };
 
-                let Some(name) = &extract_name_deep_from_expression(callee) else {
+                let Some(name) = &extract_name_deep_from_expression(callee, ctx.allocator()) else {
                     return;
                 };
 
@@ -457,7 +460,7 @@ impl Rule for NewCap {
                     return;
                 };
 
-                let Some(name) = &extract_name_deep_from_expression(callee) else {
+                let Some(name) = &extract_name_deep_from_expression(callee, ctx.allocator()) else {
                     return;
                 };
 
@@ -484,61 +487,94 @@ impl Rule for NewCap {
     }
 }
 
-fn extract_name_deep_from_expression(expression: &Expression) -> Option<CompactStr> {
+fn extract_name_deep_from_expression<'a>(
+    expression: &Expression<'a>,
+    allocator: &'a Allocator,
+) -> Option<JSStr<'a>> {
     if let Some(identifier) = expression.get_identifier_reference() {
         return Some(identifier.name.into());
     }
 
     match expression.without_parentheses() {
         Expression::StaticMemberExpression(expression) => {
-            let prop_name = expression.property.name.into_compact_str();
-            let obj_name =
-                extract_name_deep_from_expression(expression.object.without_parentheses());
+            let prop_name: JSStr = expression.property.name.into();
+            let obj_name = extract_name_deep_from_expression(
+                expression.object.without_parentheses(),
+                allocator,
+            );
 
             if let Some(obj_name) = obj_name {
-                let new_name = format!("{obj_name}.{prop_name}");
-                return Some(CompactStr::new(&new_name));
+                let mut name =
+                    JSStrBuilder::with_capacity_in(obj_name.len() + 1 + prop_name.len(), allocator);
+                name.push_js_str(obj_name);
+                name.push('.');
+                name.push_js_str(prop_name);
+                return Some(name.into_js_str());
             }
 
             Some(prop_name)
         }
         Expression::ComputedMemberExpression(expression) => {
             let (prop_name, _) = get_computed_member_name(expression)?;
-            let obj_name =
-                extract_name_deep_from_expression(expression.object.without_parentheses());
+            let obj_name = extract_name_deep_from_expression(
+                expression.object.without_parentheses(),
+                allocator,
+            );
 
             if let Some(obj_name) = obj_name {
-                let new_name = format!("{obj_name}.{prop_name}");
-                return Some(CompactStr::new(&new_name));
+                let mut name =
+                    JSStrBuilder::with_capacity_in(obj_name.len() + 1 + prop_name.len(), allocator);
+                name.push_js_str(obj_name);
+                name.push('.');
+                name.push_js_str(prop_name);
+                return Some(name.into_js_str());
             }
 
             Some(prop_name)
         }
         Expression::ChainExpression(chain) => match &chain.expression {
-            ChainElement::CallExpression(call) => extract_name_deep_from_expression(&call.callee),
+            ChainElement::CallExpression(call) => {
+                extract_name_deep_from_expression(&call.callee, allocator)
+            }
             ChainElement::TSNonNullExpression(non_null) => {
-                extract_name_deep_from_expression(&non_null.expression)
+                extract_name_deep_from_expression(&non_null.expression, allocator)
             }
             ChainElement::StaticMemberExpression(expression) => {
-                let prop_name = expression.property.name.into_compact_str();
-                let obj_name =
-                    extract_name_deep_from_expression(expression.object.without_parentheses());
+                let prop_name: JSStr = expression.property.name.into();
+                let obj_name = extract_name_deep_from_expression(
+                    expression.object.without_parentheses(),
+                    allocator,
+                );
 
                 if let Some(obj_name) = obj_name {
-                    let new_name = format!("{obj_name}.{prop_name}");
-                    return Some(CompactStr::new(&new_name));
+                    let mut name = JSStrBuilder::with_capacity_in(
+                        obj_name.len() + 1 + prop_name.len(),
+                        allocator,
+                    );
+                    name.push_js_str(obj_name);
+                    name.push('.');
+                    name.push_js_str(prop_name);
+                    return Some(name.into_js_str());
                 }
 
                 Some(prop_name)
             }
             ChainElement::ComputedMemberExpression(expression) => {
                 let (prop_name, _) = get_computed_member_name(expression)?;
-                let obj_name =
-                    extract_name_deep_from_expression(expression.object.without_parentheses());
+                let obj_name = extract_name_deep_from_expression(
+                    expression.object.without_parentheses(),
+                    allocator,
+                );
 
                 if let Some(obj_name) = obj_name {
-                    let new_name = format!("{obj_name}.{prop_name}");
-                    return Some(CompactStr::new(&new_name));
+                    let mut name = JSStrBuilder::with_capacity_in(
+                        obj_name.len() + 1 + prop_name.len(),
+                        allocator,
+                    );
+                    name.push_js_str(obj_name);
+                    name.push('.');
+                    name.push_js_str(prop_name);
+                    return Some(name.into_js_str());
                 }
 
                 Some(prop_name)
@@ -549,37 +585,33 @@ fn extract_name_deep_from_expression(expression: &Expression) -> Option<CompactS
     }
 }
 
-fn get_computed_member_name(
-    computed_member: &ComputedMemberExpression,
-) -> Option<(CompactStr, Span)> {
+fn get_computed_member_name<'a>(
+    computed_member: &ComputedMemberExpression<'a>,
+) -> Option<(JSStr<'a>, Span)> {
     let expression = computed_member.expression.without_parentheses();
 
     match &expression {
-        Expression::StringLiteral(lit) if !lit.value.is_empty() => {
-            Some((lit.value.as_ref().into(), lit.span))
-        }
+        Expression::StringLiteral(lit) if !lit.value.is_empty() => Some((lit.value, lit.span)),
         Expression::TemplateLiteral(lit)
             if lit.expressions.is_empty()
                 && lit.quasis.len() == 1
                 && !lit.quasis[0].value.raw.is_empty() =>
         {
-            Some((lit.quasis[0].value.raw.as_ref().into(), lit.span))
+            Some((lit.quasis[0].value.cooked?, lit.span))
         }
-        Expression::RegExpLiteral(lit) => {
-            lit.raw.as_ref().map(|&x| (x.into_compact_str(), lit.span))
-        }
+        Expression::RegExpLiteral(lit) => lit.raw.as_ref().map(|&x| (x.into(), lit.span)),
         _ => None,
     }
 }
 
-fn extract_name_from_expression(expression: &Expression) -> Option<(CompactStr, Span)> {
+fn extract_name_from_expression<'a>(expression: &Expression<'a>) -> Option<(JSStr<'a>, Span)> {
     if let Some(identifier) = expression.get_identifier_reference() {
         return Some((identifier.name.into(), identifier.span));
     }
 
     match expression.without_parentheses() {
         Expression::StaticMemberExpression(expression) => {
-            Some((expression.property.name.into_compact_str(), expression.property.span))
+            Some((expression.property.name.into(), expression.property.span))
         }
         Expression::ComputedMemberExpression(expression) => get_computed_member_name(expression),
         Expression::ChainExpression(chain) => match &chain.expression {
@@ -588,7 +620,7 @@ fn extract_name_from_expression(expression: &Expression) -> Option<(CompactStr, 
                 extract_name_from_expression(&non_null.expression)
             }
             ChainElement::StaticMemberExpression(expression) => {
-                Some((expression.property.name.into_compact_str(), expression.property.span))
+                Some((expression.property.name.into(), expression.property.span))
             }
             ChainElement::ComputedMemberExpression(expression) => {
                 get_computed_member_name(expression)
@@ -600,26 +632,26 @@ fn extract_name_from_expression(expression: &Expression) -> Option<(CompactStr, 
 }
 
 fn is_cap_allowed_expression<'a, I>(
-    short_name: &CompactStr,
-    name: &CompactStr,
+    short_name: &JSStr<'_>,
+    name: &JSStr<'_>,
     exceptions: I,
-    patterns: Option<&Regex>,
+    patterns: Option<&BytesRegex>,
 ) -> bool
 where
     I: Iterator<Item = &'a str>,
 {
     for exception in exceptions {
-        if exception == name.as_str() || exception == short_name.as_str() {
+        if *name == exception || *short_name == exception {
             return true;
         }
     }
 
-    if name == "Date.UTC" {
+    if *name == "Date.UTC" {
         return true;
     }
 
     if let Some(pattern) = &patterns {
-        return pattern.find(name).is_some();
+        return pattern.find(name.as_wtf8()).is_some();
     }
 
     false
@@ -632,8 +664,10 @@ enum GetCapResult {
     NonAlpha,
 }
 
-fn get_cap(string: &CompactStr) -> GetCapResult {
-    let first_char = string.chars().next().unwrap();
+fn get_cap(string: &JSStr<'_>) -> GetCapResult {
+    let Some(first_char) = string.chars().next().and_then(oxc_str::JSChar::to_char) else {
+        return GetCapResult::NonAlpha;
+    };
 
     if !first_char.is_alphabetic() {
         return GetCapResult::NonAlpha;
@@ -790,4 +824,25 @@ fn invalid_configs_error_in_from_configuration() {
 
     let valid = serde_json::json!([{ "capIsNew": false, "properties": false }]);
     assert!(NewCap::from_configuration(valid).is_ok());
+}
+
+#[test]
+fn test_jsstr_consumers() {
+    use crate::{rule::RuleMeta, tester::Tester};
+    let pass = vec![
+        (r#"new obj["Upper\uD800"]();"#, None),
+        (r#"obj["lower\uDC00"]();"#, None),
+        (
+            r#"obj["Upper\uD800"]();"#,
+            Some(serde_json::json!([{"capIsNewExceptionPattern":"^obj\\.Upper"}])),
+        ),
+        (r#"new obj["\uD800"]();"#, None),
+    ];
+    let fail = vec![
+        (r#"new obj["lower\uD800"]();"#, None),
+        (r#"obj["Upper\uDC00"]();"#, None),
+        (r"new obj[`lower\uD800`]();", None),
+        (r#"obj["Upper\uD800\uDC00"]();"#, None),
+    ];
+    Tester::new(NewCap::NAME, NewCap::PLUGIN, pass, fail).test();
 }

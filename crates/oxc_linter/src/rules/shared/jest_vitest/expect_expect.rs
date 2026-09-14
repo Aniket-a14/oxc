@@ -1,4 +1,4 @@
-use lazy_regex::Regex;
+use lazy_regex::BytesRegex as Regex;
 use rustc_hash::FxHashSet;
 use schemars::JsonSchema;
 use serde::de::Error;
@@ -111,10 +111,10 @@ impl AssertFunctionMatcher {
         }
     }
 
-    fn is_match(&self, name: &str) -> bool {
+    fn is_match(&self, name: oxc_str::JSStr) -> bool {
         match self {
             Self::Exact(expected) => is_exact_assert_function_match(name, expected),
-            Self::Pattern(pattern) => pattern.is_match(name),
+            Self::Pattern(pattern) => pattern.is_match(name.as_wtf8()),
         }
     }
 }
@@ -123,13 +123,16 @@ fn is_exact_assert_function_name(name: &str) -> bool {
     name.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.'))
 }
 
-fn is_exact_assert_function_match(name: &str, expected: &str) -> bool {
+fn is_exact_assert_function_match(name: oxc_str::JSStr, expected: &str) -> bool {
     if name.len() == expected.len() {
-        return name.eq_ignore_ascii_case(expected);
+        return name.eq_ignore_ascii_case(expected.into());
     }
 
-    name.as_bytes().get(expected.len()).is_some_and(|byte| *byte == b'.')
-        && name.get(..expected.len()).is_some_and(|prefix| prefix.eq_ignore_ascii_case(expected))
+    name.as_wtf8().get(expected.len()).is_some_and(|byte| *byte == b'.')
+        && name
+            .as_wtf8()
+            .get(..expected.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(expected.as_bytes()))
 }
 
 fn compile_assert_function_matchers(
@@ -205,16 +208,21 @@ fn run<'a>(
 ) {
     let node = possible_jest_node.node;
     if let AstKind::CallExpression(call_expr) = node.kind() {
-        let name = get_node_name(&call_expr.callee);
+        let name = get_node_name(&call_expr.callee, ctx.allocator());
         if is_type_of_jest_fn_call(
             call_expr,
             possible_jest_node,
             ctx,
             &[JestFnKind::General(JestGeneralFnKind::Test)],
-        ) || rule.additional_test_block_functions.contains(&name)
+        ) || rule
+            .additional_test_block_functions
+            .iter()
+            .any(|expected| name == expected.as_str())
         {
             if let Some(member_expr) = call_expr.callee.as_member_expression() {
-                let Some(property_name) = member_expr.static_property_name() else {
+                let Some(property_name) =
+                    member_expr.static_property_name().and_then(oxc_str::JSStr::as_str)
+                else {
                     return;
                 };
                 if property_name == "todo" {
@@ -323,8 +331,8 @@ impl<'a, 'b> AssertionVisitor<'a, 'b> {
 
 impl<'a> VisitJs<'a> for AssertionVisitor<'a, '_> {
     fn visit_call_expression(&mut self, call_expr: &CallExpression<'a>) {
-        let name = get_node_name(&call_expr.callee);
-        if self.assert_function_matchers.iter().any(|matcher| matcher.is_match(&name)) {
+        let name = get_node_name(&call_expr.callee, self.ctx.allocator());
+        if self.assert_function_matchers.iter().any(|matcher| matcher.is_match(name)) {
             self.found_assertion = true;
             return;
         }

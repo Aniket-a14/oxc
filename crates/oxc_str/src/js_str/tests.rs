@@ -326,3 +326,76 @@ fn reject_capacity_overflow() {
     let allocator = Allocator::new();
     let _ = JSStrBuilder::with_capacity_in(usize::MAX, &allocator);
 }
+
+#[test]
+fn utf8_search_preserves_surrogate_boundaries() {
+    let allocator = Allocator::new();
+    for units in [&[0xD800][..], &[0xDC00], &[0xD83D, 0xDE00]] {
+        let mut builder = JSStrBuilder::new_in(&allocator);
+        builder.push_str("é ");
+        builder.push_utf16(units);
+        builder.push_str(" two  spaces ");
+        let value = builder.into_js_str();
+        assert!(value.starts_with("é "));
+        assert!(value.ends_with("spaces "));
+        assert!(value.contains("  "));
+        assert!(value.contains(""));
+        assert!(!value.contains("�"));
+        assert!(!value.starts_with("two"));
+        assert!(!value.ends_with("é"));
+    }
+    let lead = from_utf16_in(&[0xD800], &allocator);
+    assert_eq!(lead.as_wtf8(), &[0xED, 0xA0, 0x80]);
+    assert!(std::str::from_utf8(lead.as_wtf8()).is_err());
+}
+
+#[test]
+fn split_recomputes_surrogate_flags() {
+    let allocator = Allocator::new();
+    let mut builder = JSStrBuilder::new_in(&allocator);
+    builder.push_code_unit(0xD800);
+    builder.push_str("/HELLO/é");
+    builder.push_code_unit(0xDC00);
+    let value = builder.into_js_str();
+    let (lead, rest) = value.split_once("/").unwrap();
+    let (text, trail) = rest.rsplit_once("/").unwrap();
+    assert_eq!(lead.encode_utf16().collect::<Vec<_>>(), [0xD800]);
+    assert_eq!(text.as_str(), Some("HELLO"));
+    assert!(text.eq_ignore_ascii_case(JSStr::from("hello")));
+    assert_eq!(trail.encode_utf16().collect::<Vec<_>>(), [0xE9, 0xDC00]);
+    assert!(!lead.eq_ignore_ascii_case(trail));
+    assert_eq!(value.split_once("").unwrap(), (JSStr::empty(), value));
+    assert_eq!(value.rsplit_once("").unwrap(), (value, JSStr::empty()));
+    assert!(value.split_once("�").is_none());
+}
+
+#[test]
+fn split_whitespace_preserves_jsstr_tokens() {
+    let allocator = Allocator::new();
+    let units = [0x20, 0x61, 0x09, 0xD800, 0x2003, 0xDC00, 0x20, 0xD800, 0xDC00, 0x20, 0x62];
+    let mut builder = JSStrBuilder::new_in(&allocator);
+    builder.push_utf16(&units);
+    let mut tokens = builder.into_js_str().split_whitespace();
+    for (expected, has_lone) in [
+        (&[0x61][..], false),
+        (&[0xD800], true),
+        (&[0xDC00], true),
+        (&[0xD800, 0xDC00], false),
+        (&[0x62], false),
+    ] {
+        let token = tokens.next().unwrap();
+        assert_eq!(token.encode_utf16().collect::<Vec<_>>(), expected);
+        assert_eq!(token.has_lone_surrogate(), has_lone);
+    }
+    assert!(tokens.next().is_none());
+    assert!(tokens.next().is_none());
+    for input in ["", " ", "abc", "  alpha\tbeta\u{2003}gamma  "] {
+        assert_eq!(
+            JSStr::from(input)
+                .split_whitespace()
+                .map(|part| part.as_str().unwrap())
+                .collect::<Vec<_>>(),
+            input.split_whitespace().collect::<Vec<_>>()
+        );
+    }
+}

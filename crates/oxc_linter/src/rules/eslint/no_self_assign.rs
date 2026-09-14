@@ -433,3 +433,17 @@ fn test() {
 
     Tester::new(NoSelfAssign::NAME, NoSelfAssign::PLUGIN, pass, fail).test_and_snapshot();
 }
+
+#[test]
+fn test_jsstr_member_identity() {
+    use crate::tester::Tester;
+    use cow_utils::CowUtils;
+
+    let mut pass = vec![r#"obj["\uD800"] = obj["\uD801"];"#.to_string()];
+    let mut fail = Vec::new();
+    for key in ["normal", r"\uD800", r"\uDC00", r"\uD800\uDC00", r"before\uD800after"] {
+        fail.push(format!(r#"obj["{key}"] = obj["{}"] ;"#, key.cow_to_ascii_lowercase()));
+        pass.push(format!(r#"obj["{key}"] = obj["other{key}"];"#));
+    }
+    Tester::new(NoSelfAssign::NAME, NoSelfAssign::PLUGIN, pass, fail).test();
+}

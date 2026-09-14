@@ -2017,6 +2017,7 @@ dependencies = [
  "oxc_data_structures",
  "oxc_regular_expression",
  "oxc_span",
+ "oxc_str",
  "oxc_syntax",
  "smallvec",
 ]
@@ -2134,6 +2135,7 @@ dependencies = [
  "oxc_formatter_tests",
  "oxc_parser",
  "oxc_span",
+ "oxc_str",
  "oxc_syntax",
  "oxc_tasks_common",
  "pico-args",
@@ -2245,6 +2247,7 @@ dependencies = [
  "convert_case 0.12.0",
  "cow-utils",
  "fast-glob",
+ "hashbrown 0.17.1",
  "ignore",
  "indexmap",
  "insta",
@@ -2576,6 +2579,7 @@ dependencies = [
 name = "oxc_semantic"
 version = "0.149.0"
 dependencies = [
+ "hashbrown 0.17.1",
  "insta",
  "itertools",
  "memchr",
@@ -2633,6 +2637,7 @@ version = "0.149.0"
 dependencies = [
  "compact_str",
  "hashbrown 0.17.1",
+ "memchr",
  "oxc-schemars",
  "oxc_allocator",
  "oxc_data_structures",
@@ -3321,6 +3326,7 @@ dependencies = [
  "oxc_ast_visit",
  "oxc_parser",
  "oxc_span",
+ "oxc_str",
  "oxc_tasks_common",
  "proc-macro2",
  "rustc-hash",

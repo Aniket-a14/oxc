@@ -94,7 +94,9 @@ impl Rule for AnchorHasContent {
 
     fn run<'a>(&self, node: &AstNode<'a>, ctx: &LintContext<'a>) {
         if let AstKind::JSXElement(jsx_el) = node.kind() {
-            let name = get_element_type(ctx, &jsx_el.opening_element);
+            let Some(name) = get_element_type(ctx, &jsx_el.opening_element).into_utf8() else {
+                return;
+            };
 
             if name == "a" || self.components.iter().any(|component| component == name.as_ref()) {
                 if is_hidden_from_screen_reader(ctx, &jsx_el.opening_element) {

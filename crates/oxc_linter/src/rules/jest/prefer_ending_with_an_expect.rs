@@ -1,4 +1,4 @@
-use lazy_regex::Regex;
+use lazy_regex::BytesRegex as Regex;
 use oxc_ast::{
     AstKind,
     ast::{Argument, Expression, FunctionBody, Statement},
@@ -190,7 +190,7 @@ impl Rule for PreferEndingWithAnExpect {
             return;
         };
 
-        let name = get_node_name(&call_expr.callee);
+        let name = get_node_name(&call_expr.callee, ctx.allocator());
 
         let Some(test_fn_argument) = call_expr.arguments.get(1) else {
             return;
@@ -211,7 +211,8 @@ impl Rule for PreferEndingWithAnExpect {
             .kind
             .to_general()
             .is_some_and(|test_kind| matches!(test_kind, JestGeneralFnKind::Test));
-        let is_additional_test_block = self.additional_test_block_functions.contains(&name);
+        let is_additional_test_block =
+            self.additional_test_block_functions.iter().any(|expected| name == expected.as_str());
 
         if !is_test_block && !is_additional_test_block {
             return;
@@ -267,9 +268,9 @@ impl PreferEndingWithAnExpect {
             return true;
         }
 
-        let node_name = get_node_name(&call_expression.callee);
+        let node_name = get_node_name(&call_expression.callee, ctx.allocator());
 
-        matches_assert_function_name(&node_name, &self.assert_function_names)
+        matches_assert_function_name(node_name, &self.assert_function_names)
     }
 }
 

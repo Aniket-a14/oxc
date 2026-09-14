@@ -27,7 +27,7 @@ use crate::{
     context::LintContext,
     module_record::{ExportEntry, ExportImportName, ImportEntry, ImportImportName, NameSpan},
     rule::Rule,
-    utils::deserialize_required_regex_option,
+    utils::{deserialize_required_bytes_regex_option, deserialize_required_regex_option},
 };
 
 fn diagnostic_with_maybe_help(span: Span, msg: String, help: Option<CompactStr>) -> OxcDiagnostic {
@@ -38,13 +38,21 @@ fn diagnostic_with_maybe_help(span: Span, msg: String, help: Option<CompactStr>)
     OxcDiagnostic::warn(msg).with_label(span)
 }
 
-fn diagnostic_path(span: Span, help: Option<CompactStr>, source: &str) -> OxcDiagnostic {
+fn diagnostic_path(
+    span: Span,
+    help: Option<CompactStr>,
+    source: impl std::fmt::Display,
+) -> OxcDiagnostic {
     let msg = format!("'{source}' import is restricted from being used.");
 
     diagnostic_with_maybe_help(span, msg, help)
 }
 
-fn diagnostic_pattern(span: Span, help: Option<CompactStr>, source: &str) -> OxcDiagnostic {
+fn diagnostic_pattern(
+    span: Span,
+    help: Option<CompactStr>,
+    source: impl std::fmt::Display,
+) -> OxcDiagnostic {
     let msg = format!("'{source}' import is restricted from being used by a pattern.");
 
     diagnostic_with_maybe_help(span, msg, help)
@@ -53,8 +61,8 @@ fn diagnostic_pattern(span: Span, help: Option<CompactStr>, source: &str) -> Oxc
 fn diagnostic_pattern_and_import_name(
     span: Span,
     help: Option<CompactStr>,
-    name: &str,
-    source: &str,
+    name: impl std::fmt::Display,
+    source: impl std::fmt::Display,
 ) -> OxcDiagnostic {
     let msg =
         format!("'{name}' import from '{source}' is restricted from being used by a pattern.");
@@ -66,7 +74,7 @@ fn diagnostic_pattern_and_everything(
     span: Span,
     help: Option<CompactStr>,
     name: &str,
-    source: &str,
+    source: impl std::fmt::Display,
 ) -> OxcDiagnostic {
     let msg = format!(
         "* import is invalid because '{name}' from '{source}' is restricted from being used by a pattern."
@@ -79,7 +87,7 @@ fn diagnostic_pattern_and_everything_with_regex_import_name(
     span: Span,
     help: Option<CompactStr>,
     name: &Regex,
-    source: &str,
+    source: impl std::fmt::Display,
 ) -> OxcDiagnostic {
     let regex = name.as_str();
     let msg = format!(
@@ -93,7 +101,7 @@ fn diagnostic_everything(
     span: Span,
     help: Option<CompactStr>,
     name: &str,
-    source: &str,
+    source: impl std::fmt::Display,
 ) -> OxcDiagnostic {
     let msg = format!("* import is invalid because '{name}' from '{source}' is restricted.");
 
@@ -103,8 +111,8 @@ fn diagnostic_everything(
 fn diagnostic_import_name(
     span: Span,
     help: Option<CompactStr>,
-    name: &str,
-    source: &str,
+    name: impl std::fmt::Display,
+    source: impl std::fmt::Display,
 ) -> OxcDiagnostic {
     let msg = format!("'{name}' import from '{source}' is restricted.");
 
@@ -114,8 +122,8 @@ fn diagnostic_import_name(
 fn diagnostic_allowed_import_name(
     span: Span,
     help: Option<CompactStr>,
-    name: &str,
-    source: &str,
+    name: impl std::fmt::Display,
+    source: impl std::fmt::Display,
     allowed: &str,
 ) -> OxcDiagnostic {
     let msg = format!(
@@ -128,7 +136,7 @@ fn diagnostic_allowed_import_name(
 fn diagnostic_everything_with_allowed_import_name(
     span: Span,
     help: Option<CompactStr>,
-    source: &str,
+    source: impl std::fmt::Display,
     allowed: &str,
 ) -> OxcDiagnostic {
     let msg =
@@ -140,8 +148,8 @@ fn diagnostic_everything_with_allowed_import_name(
 fn diagnostic_allowed_import_name_pattern(
     span: Span,
     help: Option<CompactStr>,
-    name: &str,
-    source: &str,
+    name: impl std::fmt::Display,
+    source: impl std::fmt::Display,
     allowed_pattern: &str,
 ) -> OxcDiagnostic {
     let msg = format!(
@@ -154,7 +162,7 @@ fn diagnostic_allowed_import_name_pattern(
 fn diagnostic_everything_with_allowed_import_name_pattern(
     span: Span,
     help: Option<CompactStr>,
-    source: &str,
+    source: impl std::fmt::Display,
     allowed_pattern: &str,
 ) -> OxcDiagnostic {
     let msg = format!(
@@ -249,8 +257,9 @@ struct RestrictedPath {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RestrictedPattern {
     group: Option<Vec<CompactStr>>,
-    #[serde(default, deserialize_with = "deserialize_required_regex_option")]
-    regex: Option<Regex>,
+    #[serde(default, deserialize_with = "deserialize_required_bytes_regex_option")]
+    #[schemars(with = "Option<Regex>")]
+    regex: Option<lazy_regex::BytesRegex>,
     import_names: Option<Vec<CompactStr>>,
     #[serde(default, deserialize_with = "deserialize_required_regex_option")]
     import_name_pattern: Option<Regex>,
@@ -694,6 +703,7 @@ enum NameSpanAllowedResult {
 
 #[derive(PartialEq, Debug)]
 enum ImportNameResult {
+    SourceDisallowed(Span),
     Allowed,
     GeneralDisallowed,
     DefaultDisallowed,
@@ -795,12 +805,11 @@ impl RestrictedPath {
             return ImportNameResult::Allowed;
         }
 
-        let name = literal.value.into_compact_str();
         let unused_name = &CompactStr::from("__<>import_name_that_cant_be_used<>__");
 
         match self.is_name_span_allowed(unused_name) {
             NameSpanAllowedResult::NameDisallowed => {
-                ImportNameResult::NameDisallowed(NameSpan::new(name, literal.span))
+                ImportNameResult::SourceDisallowed(literal.span)
             }
             NameSpanAllowedResult::GeneralDisallowed => ImportNameResult::GeneralDisallowed,
             NameSpanAllowedResult::Allowed => ImportNameResult::Allowed,
@@ -899,12 +908,11 @@ impl RestrictedPattern {
             return ImportNameResult::Allowed;
         }
 
-        let name = literal.value.into_compact_str();
         let unused_name = &CompactStr::from("__<>import_name_that_cant_be_used<>__");
 
         match self.is_name_span_allowed(unused_name) {
             NameSpanAllowedResult::NameDisallowed => {
-                ImportNameResult::NameDisallowed(NameSpan::new(name, literal.span))
+                ImportNameResult::SourceDisallowed(literal.span)
             }
             NameSpanAllowedResult::GeneralDisallowed => ImportNameResult::GeneralDisallowed,
             NameSpanAllowedResult::Allowed => ImportNameResult::Allowed,
@@ -916,10 +924,11 @@ impl RestrictedPattern {
         self.is_name_span_allowed(&unused_name) == NameSpanAllowedResult::Allowed
     }
 
-    fn get_group_glob_result(&self, name: &str) -> GlobResult {
+    fn get_group_glob_result<'a>(&self, name: impl Into<oxc_str::JSStr<'a>>) -> GlobResult {
         let Some(groups) = &self.group else {
             return GlobResult::None;
         };
+        let name = name.into().as_wtf8();
 
         let case_insensitive = !self.case_sensitive.unwrap_or(false);
 
@@ -938,10 +947,12 @@ impl RestrictedPattern {
                 Cow::Owned(format!("**/{pat}"))
             };
 
-            let (pat, name) = if case_insensitive {
-                (pat.cow_to_ascii_lowercase(), name.cow_to_ascii_lowercase())
+            let pat = if case_insensitive { pat.cow_to_ascii_lowercase() } else { pat };
+            let name: Cow<'_, [u8]> = if case_insensitive && name.iter().any(u8::is_ascii_uppercase)
+            {
+                Cow::Owned(name.to_ascii_lowercase())
             } else {
-                (pat, name.into())
+                Cow::Borrowed(name)
             };
 
             if fast_glob::glob_match(pat.as_ref(), name.as_ref()) {
@@ -952,8 +963,8 @@ impl RestrictedPattern {
         decision
     }
 
-    fn get_regex_result(&self, name: &str) -> bool {
-        self.regex.as_ref().is_some_and(|regex| regex.is_match(name))
+    fn get_regex_result<'a>(&self, name: impl Into<oxc_str::JSStr<'a>>) -> bool {
+        self.regex.as_ref().is_some_and(|regex| regex.is_match(name.into().as_wtf8()))
     }
 
     fn get_import_name_pattern_result(&self, name: &CompactStr) -> bool {
@@ -1081,7 +1092,10 @@ impl Rule for NoRestrictedImports {
 
 impl NoRestrictedImports {
     fn report_side_effects(&self, ctx: &LintContext<'_>, module_record: &ModuleRecord) {
-        let mut side_effect_import_map: FxHashMap<&CompactStr, Vec<Span>> = FxHashMap::default();
+        let mut side_effect_import_map: FxHashMap<
+            &crate::module_record::ModuleSpecifier,
+            Vec<Span>,
+        > = FxHashMap::default();
 
         for (source, requests) in &module_record.requested_modules {
             for request in requests {
@@ -1099,7 +1113,7 @@ impl NoRestrictedImports {
 
         for path in &self.paths {
             for (source, spans) in &side_effect_import_map {
-                if source.as_str() == path.name.as_str() && path.import_names.is_none() {
+                if source.as_js_str() == path.name.as_str() && path.import_names.is_none() {
                     debug_assert!(
                         !spans.is_empty(),
                         "all import entries must have at least one import entry"
@@ -1115,7 +1129,7 @@ impl NoRestrictedImports {
             let mut whitelist_found = false;
             let mut err = None;
             for pattern in &self.patterns {
-                match pattern.get_group_glob_result(source) {
+                match pattern.get_group_glob_result(*source) {
                     GlobResult::Whitelist => {
                         whitelist_found = true;
                         break;
@@ -1131,7 +1145,7 @@ impl NoRestrictedImports {
                     GlobResult::None => {}
                 }
 
-                if pattern.get_regex_result(source) && !pattern.is_side_effect_import_allowed() {
+                if pattern.get_regex_result(*source) && !pattern.is_side_effect_import_allowed() {
                     ctx.diagnostic(get_diagnostic_from_import_name_result_pattern(
                         spans[0],
                         source,
@@ -1153,10 +1167,10 @@ impl NoRestrictedImports {
         reported_general_paths: &mut FxHashSet<ReportedGeneralImport>,
         reported_general_patterns: &mut FxHashSet<ReportedGeneralImport>,
     ) {
-        let source = entry.module_request.name();
+        let source = &entry.module_request.name;
 
         for (path_index, path) in self.paths.iter().enumerate() {
-            if source != path.name.as_str() {
+            if source.as_js_str() != path.name.as_str() {
                 continue;
             }
 
@@ -1285,10 +1299,10 @@ impl NoRestrictedImports {
         is_type: bool,
         is_dynamic_import: bool,
     ) {
-        let source = source_literal.value.as_str();
+        let source = oxc_ast::StaticName::Borrowed(source_literal.value);
 
         for path in &self.paths {
-            if source != path.name.as_str() {
+            if source.as_js_str() != path.name.as_str() {
                 continue;
             }
 
@@ -1307,7 +1321,7 @@ impl NoRestrictedImports {
             }
 
             let diagnostic =
-                get_diagnostic_from_import_name_result_path(span, source, result, path);
+                get_diagnostic_from_import_name_result_path(span, &source, result, path);
 
             ctx.diagnostic(diagnostic);
         }
@@ -1331,14 +1345,14 @@ impl NoRestrictedImports {
                 continue;
             }
 
-            match pattern.get_group_glob_result(source) {
+            match pattern.get_group_glob_result(source.as_js_str()) {
                 GlobResult::Whitelist => {
                     whitelist_found = true;
                     break;
                 }
                 GlobResult::Found => {
                     let diagnostic: OxcDiagnostic = get_diagnostic_from_import_name_result_pattern(
-                        span, source, result, pattern,
+                        span, &source, result, pattern,
                     );
 
                     found_errors.push(diagnostic);
@@ -1346,9 +1360,9 @@ impl NoRestrictedImports {
                 GlobResult::None => (),
             }
 
-            if pattern.get_regex_result(source) {
+            if pattern.get_regex_result(source.as_js_str()) {
                 ctx.diagnostic(get_diagnostic_from_import_name_result_pattern(
-                    span, source, result, pattern,
+                    span, &source, result, pattern,
                 ));
             }
         }
@@ -1367,13 +1381,12 @@ impl NoRestrictedImports {
         reported_general_paths: &mut FxHashSet<ReportedGeneralImport>,
         reported_general_patterns: &mut FxHashSet<ReportedGeneralImport>,
     ) {
-        let Some(source) = entry.module_request.as_ref().map(crate::module_record::NameSpan::name)
-        else {
+        let Some(source) = entry.module_request.as_ref().map(|request| &request.name) else {
             return;
         };
 
         for (path_index, path) in self.paths.iter().enumerate() {
-            if source != path.name.as_str() {
+            if source.as_js_str() != path.name.as_str() {
                 continue;
             }
 
@@ -1466,11 +1479,25 @@ impl NoRestrictedImports {
 
 fn get_diagnostic_from_import_name_result_path(
     span: Span,
-    source: &str,
+    source: impl std::fmt::Display,
     result: &ImportNameResult,
     path: &RestrictedPath,
 ) -> OxcDiagnostic {
     match result {
+        ImportNameResult::SourceDisallowed(source_span) => {
+            if let Some(allowed) = &path.allow_import_names {
+                diagnostic_allowed_import_name(
+                    *source_span,
+                    path.message.clone(),
+                    &source,
+                    &source,
+                    allowed.join(", ").as_str(),
+                )
+            } else {
+                diagnostic_import_name(*source_span, path.message.clone(), &source, &source)
+            }
+        }
+
         ImportNameResult::GeneralDisallowed => diagnostic_path(span, path.message.clone(), source),
         ImportNameResult::DefaultDisallowed => match &path.import_names {
             Some(import_names) => diagnostic_everything(
@@ -1510,11 +1537,38 @@ fn get_diagnostic_from_import_name_result_path(
 
 fn get_diagnostic_from_import_name_result_pattern(
     span: Span,
-    source: &str,
+    source: impl std::fmt::Display,
     result: &ImportNameResult,
     pattern: &RestrictedPattern,
 ) -> OxcDiagnostic {
     match result {
+        ImportNameResult::SourceDisallowed(source_span) => {
+            if let Some(allowed) = &pattern.allow_import_names {
+                diagnostic_allowed_import_name(
+                    *source_span,
+                    pattern.message.clone(),
+                    &source,
+                    &source,
+                    allowed.join(", ").as_str(),
+                )
+            } else if let Some(allowed) = &pattern.allow_import_name_pattern {
+                diagnostic_allowed_import_name_pattern(
+                    *source_span,
+                    pattern.message.clone(),
+                    &source,
+                    &source,
+                    allowed.as_str(),
+                )
+            } else {
+                diagnostic_pattern_and_import_name(
+                    *source_span,
+                    pattern.message.clone(),
+                    &source,
+                    &source,
+                )
+            }
+        }
+
         ImportNameResult::GeneralDisallowed => {
             diagnostic_pattern(span, pattern.message.clone(), source)
         }
@@ -3602,5 +3656,26 @@ fn test() {
     fail.extend(fail_typescript);
 
     Tester::new(NoRestrictedImports::NAME, NoRestrictedImports::PLUGIN, pass, fail)
+        .test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr() {
+    use crate::tester::Tester;
+    let patterns = Some(serde_json::json!([{"patterns": ["blocked*"]}]));
+    let regex = Some(serde_json::json!([{"patterns": [{"regex": "^blocked"}]}]));
+    let pass = vec![(r#"import "ok\uD800";"#, patterns.clone())];
+    let fail = vec![
+        (r#"import "blocked\uD800";"#, patterns.clone()),
+        (r#"import x from "blocked\uDC00";"#, patterns.clone()),
+        (r#"export * from "blocked\uD800";"#, patterns.clone()),
+        (r#"export {x} from "blocked\uDC00";"#, patterns.clone()),
+        (r#"import("blocked\uD800");"#, patterns.clone()),
+        (r#"import x = require("blocked\uDC00");"#, patterns),
+        (r#"import "blocked\uD800";"#, regex.clone()),
+        (r#"import("blocked\uDC00");"#, regex),
+    ];
+    Tester::new(NoRestrictedImports::NAME, NoRestrictedImports::PLUGIN, pass, fail)
+        .with_snapshot_suffix("jsstr")
         .test_and_snapshot();
 }

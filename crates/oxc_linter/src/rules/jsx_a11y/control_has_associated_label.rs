@@ -20,7 +20,6 @@ use crate::{
     utils::{
         get_element_type, get_jsx_attribute_name, get_string_literal_prop_value, has_jsx_prop,
         is_hidden_from_screen_reader, is_interactive_element, is_interactive_role,
-        is_react_component_name,
     },
 };
 
@@ -155,7 +154,9 @@ impl Rule for ControlHasAssociatedLabel {
             return;
         };
 
-        let element_type = get_element_type(ctx, &element.opening_element);
+        let Some(element_type) = get_element_type(ctx, &element.opening_element).into_utf8() else {
+            return;
+        };
 
         if ALWAYS_IGNORE_ELEMENTS.contains(&element_type.as_ref())
             || self.ignore_elements.iter().any(|e| e.as_str() == element_type.as_ref())
@@ -177,7 +178,8 @@ impl Rule for ControlHasAssociatedLabel {
 
         let is_dom_element = HTML_TAG.contains(element_type.as_ref());
         let is_interactive_el = is_interactive_element(&element_type, &element.opening_element);
-        let is_interactive_role_el = role.is_some_and(is_interactive_role);
+        let is_interactive_role_el =
+            role.and_then(oxc_str::JSStr::as_str).is_some_and(is_interactive_role);
         let is_control_component =
             self.control_components.iter().any(|c| c.as_str() == element_type.as_ref());
 
@@ -227,7 +229,7 @@ impl ControlHasAssociatedLabel {
                 match &attr.value {
                     None => false,
                     Some(JSXAttributeValue::StringLiteral(s)) => {
-                        !s.value.as_str().trim().is_empty()
+                        s.value.as_str().is_none_or(|value| !value.trim().is_empty())
                     }
                     Some(_) => true,
                 }
@@ -255,8 +257,13 @@ impl ControlHasAssociatedLabel {
 
                 if element.children.is_empty() {
                     let name = get_element_type(ctx, &element.opening_element);
-                    if is_react_component_name(&name)
-                        && !self.control_components.iter().any(|c| c.as_str() == name.as_ref())
+                    if name
+                        .as_js_str()
+                        .chars()
+                        .next()
+                        .and_then(oxc_str::JSChar::to_char)
+                        .is_some_and(|ch| ch.is_ascii_uppercase())
+                        && !self.control_components.iter().any(|c| name == c.as_str())
                     {
                         return true;
                     }

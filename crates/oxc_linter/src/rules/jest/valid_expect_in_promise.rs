@@ -1530,3 +1530,14 @@ fn test() {
         .with_jest_plugin(true)
         .test_and_snapshot();
 }
+
+#[test]
+fn test_jsstr_assigned_promises() {
+    use crate::tester::Tester;
+
+    let mut fail = Vec::new();
+    for name in ["normal", r"\uD800", r"\uD801", r"\uDC00", r"\uD800\uDC00", r"before\uD800after"] {
+        fail.push(format!(r#"test("case", () => {{ obj["{name}"] = Promise.resolve().then(() => {{ expect(true).toBe(true); }}); }});"#));
+    }
+    Tester::new(ValidExpectInPromise::NAME, ValidExpectInPromise::PLUGIN, vec![], fail).test();
+}

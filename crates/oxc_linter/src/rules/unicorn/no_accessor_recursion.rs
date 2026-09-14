@@ -264,13 +264,11 @@ fn is_property_write<'a>(node: &AstNode<'a>, ctx: &LintContext<'a>) -> bool {
     false
 }
 
-fn get_member_expr_key_name<'a>(expr: &'a MemberExpressionKind) -> Option<&'a str> {
+fn get_member_expr_key_name<'a>(expr: &'a MemberExpressionKind) -> Option<oxc_str::JSStr<'a>> {
     match expr {
-        MemberExpressionKind::Computed(expr) => {
-            expr.static_property_name().map(|name| name.as_str())
-        }
-        MemberExpressionKind::Static(expr) => Some(expr.property.name.as_str()),
-        MemberExpressionKind::PrivateField(priv_field) => Some(priv_field.field.name.as_str()),
+        MemberExpressionKind::Computed(expr) => expr.static_property_name(),
+        MemberExpressionKind::Static(expr) => Some(expr.property.name.into()),
+        MemberExpressionKind::PrivateField(priv_field) => Some(priv_field.field.name.into()),
     }
 }
 
@@ -631,5 +629,19 @@ fn test() {
     ];
 
     Tester::new(NoAccessorRecursion::NAME, NoAccessorRecursion::PLUGIN, pass, fail)
+        .test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr() {
+    use crate::tester::Tester;
+    let pass = vec![r#"class C { get "\uD800"() {return this["\uD801"];} }"#];
+    let fail = vec![
+        r#"class C { get "\uD800"() {return this["\ud800"];} }"#,
+        r#"class C { set "\uDC00"(v) {this["\udc00"] = v;} }"#,
+    ];
+    Tester::new(NoAccessorRecursion::NAME, NoAccessorRecursion::PLUGIN, pass, fail)
+        .with_snapshot_suffix("jsstr")
+        .intentionally_allow_no_fix_tests()
         .test_and_snapshot();
 }

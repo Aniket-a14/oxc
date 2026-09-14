@@ -114,7 +114,9 @@ impl Rule for AriaRole {
         {
             let element_type = get_element_type(ctx, &jsx_el.opening_element);
 
-            if self.ignore_non_dom && !HTML_TAG.contains(element_type.as_ref()) {
+            if self.ignore_non_dom
+                && !element_type.as_str().is_some_and(|name| HTML_TAG.contains(name))
+            {
                 return;
             }
 
@@ -130,7 +132,10 @@ impl Rule for AriaRole {
                     }
                 }
                 Some(JSXAttributeValue::StringLiteral(str)) => {
-                    let value = str.value.as_str();
+                    let Some(value) = str.value.as_str() else {
+                        ctx.diagnostic(aria_role_diagnostic(str.span, ctx.source_range(str.span)));
+                        return;
+                    };
                     if value.trim().is_empty() {
                         ctx.diagnostic(aria_role_diagnostic(str.span, ""));
                     } else if let Some(error_prop) = value.split_whitespace().find(|word| {

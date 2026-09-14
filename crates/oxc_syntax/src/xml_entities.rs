@@ -2,7 +2,8 @@
 
 use phf::{Map, phf_map};
 
-use oxc_allocator::{Allocator, ArenaStringBuilder};
+use oxc_allocator::Allocator;
+use oxc_str::{JSChar, JSStr, JSStrBuilder};
 
 /// XML Entities
 ///
@@ -275,8 +276,54 @@ pub const XML_ENTITIES: Map<&'static str, char> = phf_map! {
 /// Adapted from TypeScript's JSX transformer:
 /// <https://github.com/microsoft/TypeScript/blob/514f7e639a2a8466c075c766ee9857a30ed4e196/src/compiler/transformers/jsx.ts#L617-L635>.
 pub fn decode_entities<'a>(
+    s: JSStr<'_>,
+    acc: &mut Option<JSStrBuilder<'a>>,
+    text_len: usize,
+    allocator: &'a Allocator,
+) {
+    if let Some(s) = s.as_str() {
+        decode_utf8_entities(s, acc, text_len, allocator);
+    } else {
+        decode_wtf8_entities(s, acc, text_len, allocator);
+    }
+}
+
+#[cold]
+fn decode_wtf8_entities<'a>(
+    s: JSStr<'_>,
+    acc: &mut Option<JSStrBuilder<'a>>,
+    text_len: usize,
+    allocator: &'a Allocator,
+) {
+    if acc.is_none() && !s.contains("&") {
+        return;
+    }
+    acc.get_or_insert_with(|| JSStrBuilder::with_capacity_in(text_len, allocator));
+    let bytes = s.as_wtf8();
+    let mut start = 0;
+    let mut offset = 0;
+    for ch in s.chars() {
+        if let Some(ch) = ch.to_char() {
+            offset += ch.len_utf8();
+        } else {
+            // SAFETY: `JSChars` visited only Unicode scalar values since `start`;
+            // both endpoints are code point boundaries, so this run is UTF-8.
+            let run = unsafe { std::str::from_utf8_unchecked(&bytes[start..offset]) };
+            decode_utf8_entities(run, acc, text_len, allocator);
+            // Initialized above; decoding a scalar run never clears the accumulator.
+            acc.as_mut().unwrap().push_js_char(ch);
+            offset += 3;
+            start = offset;
+        }
+    }
+    // SAFETY: This final run contains only scalar values, by the same scan above.
+    let run = unsafe { std::str::from_utf8_unchecked(&bytes[start..]) };
+    decode_utf8_entities(run, acc, text_len, allocator);
+}
+
+fn decode_utf8_entities<'a>(
     s: &str,
-    acc: &mut Option<ArenaStringBuilder<'a>>,
+    acc: &mut Option<JSStrBuilder<'a>>,
     text_len: usize,
     allocator: &'a Allocator,
 ) {
@@ -295,24 +342,24 @@ pub fn decode_entities<'a>(
                 }
             }
             if let Some(end) = end {
-                let buffer = acc.get_or_insert_with(|| {
-                    ArenaStringBuilder::with_capacity_in(text_len, allocator)
-                });
+                let buffer =
+                    acc.get_or_insert_with(|| JSStrBuilder::with_capacity_in(text_len, allocator));
 
                 buffer.push_str(&s[prev..start]);
                 prev = end + 1;
                 let word = &s[start + 1..end];
                 if let Some(decimal) = word.strip_prefix('#') {
                     if let Some(hex) = decimal.strip_prefix('x') {
-                        if let Some(c) = u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
+                        if let Some(c) =
+                            u32::from_str_radix(hex, 16).ok().and_then(JSChar::from_u32)
                         {
                             // `&#x0123;`
-                            buffer.push(c);
+                            buffer.push_js_char(c);
                             continue;
                         }
-                    } else if let Some(c) = decimal.parse::<u32>().ok().and_then(char::from_u32) {
+                    } else if let Some(c) = decimal.parse::<u32>().ok().and_then(JSChar::from_u32) {
                         // `&#0123;`
-                        buffer.push(c);
+                        buffer.push_js_char(c);
                         continue;
                     }
                 } else if let Some(c) = XML_ENTITIES.get(word) {
@@ -348,7 +395,40 @@ mod tests {
         let allocator = Allocator::default();
         let input = "& &amp;";
         let mut acc = None;
-        decode_entities(input, &mut acc, input.len(), &allocator);
-        assert_eq!(acc.as_ref().unwrap().as_str(), "& &");
+        decode_entities(input.into(), &mut acc, input.len(), &allocator);
+        assert_eq!(acc.unwrap().into_js_str(), "& &");
+    }
+}
+
+#[cfg(test)]
+mod jsstr_tests {
+    use super::*;
+
+    #[test]
+    fn decode_entities_around_existing_surrogates() {
+        let allocator = Allocator::new();
+        for unit in [0xD800, 0xD801, 0xDC00] {
+            for (prefix, suffix, expected_prefix, expected_suffix) in [
+                ("before &amp;", "&quot; after", "before &", "\" after"),
+                ("&am", "p;", "&am", "p;"),
+                ("& &amp;", "&unknown;", "& &", "&unknown;"),
+                ("", "", "", ""),
+            ] {
+                let mut builder = JSStrBuilder::new_in(&allocator);
+                builder.push_str(prefix);
+                builder.push_code_unit(unit);
+                builder.push_str(suffix);
+                let input = builder.into_js_str();
+                let mut decoded = None;
+                decode_entities(input, &mut decoded, input.len(), &allocator);
+                let actual = decoded.map_or(input, JSStrBuilder::into_js_str);
+                let expected: Vec<_> = expected_prefix
+                    .encode_utf16()
+                    .chain([unit])
+                    .chain(expected_suffix.encode_utf16())
+                    .collect();
+                assert_eq!(actual.encode_utf16().collect::<Vec<_>>(), expected);
+            }
+        }
     }
 }

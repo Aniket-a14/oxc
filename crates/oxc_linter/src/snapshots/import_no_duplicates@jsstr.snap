@@ -1,0 +1,35 @@
+---
+source: crates/oxc_linter/src/tester.rs
+---
+
+  ⚠ import(no-duplicates): Module 'x' is imported more than once in this file
+   ╭─[index.ts:1:8]
+ 1 │ import "x"; import "x";
+   ·        ─┬─         ───
+   ·         ╰── It is first imported here
+   ╰────
+  help: Merge these imports into a single import statement
+
+  ⚠ import(no-duplicates): Module 'x\uD800' is imported more than once in this file
+   ╭─[index.ts:1:8]
+ 1 │ import "x\uD800"; import "x\ud800";
+   ·        ────┬────         ─────────
+   ·            ╰── It is first imported here
+   ╰────
+  help: Merge these imports into a single import statement
+
+  ⚠ import(no-duplicates): Module 'x\uDC00' is imported more than once in this file
+   ╭─[index.ts:1:8]
+ 1 │ import "x\uDC00"; import "x\udc00";
+   ·        ────┬────         ─────────
+   ·            ╰── It is first imported here
+   ╰────
+  help: Merge these imports into a single import statement
+
+  ⚠ import(no-duplicates): Module 'x\uD800\uDC00' is imported more than once in this file
+   ╭─[index.ts:1:8]
+ 1 │ import "x\uD800\uDC00"; import "x𐀀";
+   ·        ───────┬───────         ────
+   ·               ╰── It is first imported here
+   ╰────
+  help: Merge these imports into a single import statement

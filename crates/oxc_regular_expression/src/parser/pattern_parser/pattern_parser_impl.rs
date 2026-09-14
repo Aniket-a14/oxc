@@ -1917,7 +1917,7 @@ impl<'a> PatternParser<'a> {
             return None;
         }
 
-        Some(self.reader.str(span_start, self.reader.offset()))
+        self.reader.str(span_start, self.reader.offset())
     }
 
     fn consume_unicode_property_value(&mut self) -> Option<Str<'a>> {
@@ -1932,7 +1932,7 @@ impl<'a> PatternParser<'a> {
             return None;
         }
 
-        Some(self.reader.str(span_start, self.reader.offset()))
+        self.reader.str(span_start, self.reader.offset())
     }
 
     // ```
@@ -1968,7 +1968,7 @@ impl<'a> PatternParser<'a> {
 
         if self.consume_reg_exp_idenfigier_start()?.is_some() {
             while self.consume_reg_exp_idenfigier_part()?.is_some() {}
-            return Ok(Some(self.reader.str(span_start, self.reader.offset())));
+            return Ok(self.reader.str(span_start, self.reader.offset()));
         }
 
         Ok(None)

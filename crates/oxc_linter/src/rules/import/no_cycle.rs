@@ -167,7 +167,8 @@ impl Rule for NoCycle {
                 continue;
             }
 
-            let requested_module = module_record.requested_modules[&key][0];
+            let requested_module =
+                module_record.requested_modules[&oxc_str::JSStr::from(key.as_str())][0];
             let span = requested_module.span;
             let mut stack =
                 vec![(key.clone(), loaded_module_record.resolved_absolute_path.clone())];
@@ -279,7 +280,7 @@ impl NoCycle {
             let mut types = parent
                 .import_entries
                 .iter()
-                .filter(|entry| entry.module_request.name() == key)
+                .filter(|entry| entry.module_request.name() == key.as_str())
                 .map(|entry| entry.is_type)
                 .chain(
                     parent
@@ -289,7 +290,7 @@ impl NoCycle {
                             entry
                                 .module_request
                                 .as_ref()
-                                .is_some_and(|module_request| module_request.name() == key)
+                                .is_some_and(|module_request| module_request.name() == key.as_str())
                         })
                         .map(|entry| entry.is_type),
                 )
@@ -310,7 +311,7 @@ impl NoCycle {
             && let Some(e) = module
                 .indirect_export_entries
                 .iter()
-                .find(|e| e.module_request.as_ref().is_some_and(|r| r.name.as_str() == key))
+                .find(|e| e.module_request.as_ref().is_some_and(|r| r.name() == key.as_str()))
             && e.export_name.is_name()
         {
             return false;

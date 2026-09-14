@@ -9,6 +9,7 @@ use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_span::Span;
 use oxc_str::CompactStr;
+use oxc_str::JSStr;
 use schemars::JsonSchema;
 use serde_json::Value;
 
@@ -134,7 +135,7 @@ impl Rule for ImgRedundantAlt {
             return;
         };
 
-        let element_type = get_element_type(ctx, jsx_el);
+        let Some(element_type) = get_element_type(ctx, jsx_el).into_utf8() else { return };
 
         if !self.components.iter().any(|comp| comp == &element_type) {
             return;
@@ -164,7 +165,7 @@ impl Rule for ImgRedundantAlt {
 
         match alt_attribute {
             JSXAttributeValue::StringLiteral(lit) => {
-                let alt_text = lit.value.as_str();
+                let alt_text = lit.value;
 
                 if self.is_redundant_alt_text(alt_text) {
                     ctx.diagnostic(img_redundant_alt_diagnostic(alt_attribute_name_span));
@@ -172,7 +173,7 @@ impl Rule for ImgRedundantAlt {
             }
             JSXAttributeValue::ExpressionContainer(container) => match &container.expression {
                 JSXExpression::StringLiteral(lit) => {
-                    let alt_text = lit.value.as_str();
+                    let alt_text = lit.value;
 
                     if self.is_redundant_alt_text(alt_text) {
                         ctx.diagnostic(img_redundant_alt_diagnostic(alt_attribute_name_span));
@@ -180,7 +181,7 @@ impl Rule for ImgRedundantAlt {
                 }
                 JSXExpression::TemplateLiteral(lit) => {
                     for quasi in &lit.quasis {
-                        let alt_text = quasi.value.raw.as_str();
+                        let alt_text = quasi.value.raw.into();
 
                         if self.is_redundant_alt_text(alt_text) {
                             ctx.diagnostic(img_redundant_alt_diagnostic(alt_attribute_name_span));
@@ -203,7 +204,28 @@ impl ImgRedundantAlt {
     }
 
     #[inline]
-    fn is_redundant_alt_text(&self, alt_text: &str) -> bool {
+    fn is_redundant_alt_text(&self, alt_text: JSStr<'_>) -> bool {
+        if let Some(text) = alt_text.as_str() {
+            return self.is_redundant_utf8_alt_text(text);
+        }
+        let bytes = alt_text.as_wtf8();
+        self.words.iter().any(|word| {
+            if word.is_empty() {
+                let mut offset = 0;
+                return alt_text.chars().any(|ch| {
+                    let matches = Self::is_word_boundary(bytes, offset, offset);
+                    offset += ch.to_char().map_or(3, char::len_utf8);
+                    matches
+                }) || Self::is_word_boundary(bytes, bytes.len(), bytes.len());
+            }
+            bytes.windows(word.len()).enumerate().any(|(index, candidate)| {
+                candidate.eq_ignore_ascii_case(word.as_bytes())
+                    && Self::is_word_boundary(bytes, index, index + word.len())
+            })
+        })
+    }
+
+    fn is_redundant_utf8_alt_text(&self, alt_text: &str) -> bool {
         let alt_text = alt_text.cow_to_ascii_lowercase();
         let alt_text_bytes = alt_text.as_bytes();
 
@@ -325,4 +347,12 @@ fn test() {
     ];
 
     Tester::new(ImgRedundantAlt::NAME, ImgRedundantAlt::PLUGIN, pass, fail).test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr_consumers() {
+    use crate::{rule::RuleMeta, tester::Tester};
+    let pass = vec![r#"<img alt={"\uD800rainbow"} />"#, r#"<img alt={"pictures\uDC00"} />"#];
+    let fail = vec![r#"<img alt={"\uD800picture"} />"#, r#"<img alt={"A PHOTO \uDC00"} />"#];
+    Tester::new(ImgRedundantAlt::NAME, ImgRedundantAlt::PLUGIN, pass, fail).test();
 }

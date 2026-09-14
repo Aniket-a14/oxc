@@ -131,7 +131,11 @@ fn parse_capturing_groups<'a>(
                 let span_end = reader.offset();
 
                 if reader.eat('>') {
-                    let group_name = reader.str(span_start, span_end);
+                    let Some(group_name) = reader.str(span_start, span_end) else {
+                        // A lone surrogate cannot be part of a group identifier.
+                        // The pattern parser will report the invalid group name.
+                        continue;
+                    };
                     let alternative_path = tracker.get_alternative_path();
 
                     // Check for duplicates with existing groups

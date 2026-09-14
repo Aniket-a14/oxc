@@ -150,7 +150,7 @@ impl HoistedApisOnTop {
             return;
         };
 
-        if member_name.as_ref() == "hoisted" {
+        if member_name == "hoisted" {
             let parent_node = {
                 let mut tmp_parent_node = ctx.nodes().parent_node(node.id());
 
@@ -233,7 +233,7 @@ fn is_hoisted_api(member: &KnownMemberExpressionProperty) -> bool {
         return false;
     };
 
-    HOISTED_APIS.contains(&name.as_ref())
+    HOISTED_APIS.iter().any(|api| name == *api)
 }
 
 #[test]

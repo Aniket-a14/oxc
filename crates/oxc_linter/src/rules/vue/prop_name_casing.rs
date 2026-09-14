@@ -1,9 +1,9 @@
-use lazy_regex::Regex;
+use lazy_regex::BytesRegex as Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use oxc_ast::{
-    AstKind,
+    AstKind, StaticName,
     ast::{
         ArrayExpression, ArrayExpressionElement, CallExpression, Expression, ObjectExpression,
         ObjectPropertyKind, PropertyKey, TSSignature,
@@ -12,6 +12,7 @@ use oxc_ast::{
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_span::{GetSpan, Span};
+use oxc_str::JSStr;
 
 use crate::{
     AstNode,
@@ -19,12 +20,16 @@ use crate::{
     frameworks::FrameworkOptions,
     rule::{Rule, TupleRuleConfig},
     utils::{
-        deserialize_regex_vec, find_property, for_each_define_props_type_signature,
+        deserialize_bytes_regex_vec, find_property, for_each_define_props_type_signature,
         is_vue_component_options_object_excluding_instance, vue_casing,
     },
 };
 
-fn prop_name_casing_diagnostic(span: Span, name: &str, case_type: &str) -> OxcDiagnostic {
+fn prop_name_casing_diagnostic(
+    span: Span,
+    name: impl std::fmt::Display,
+    case_type: &str,
+) -> OxcDiagnostic {
     OxcDiagnostic::warn(format!("Prop '{name}' is not in {case_type}.")).with_label(span)
 }
 
@@ -53,7 +58,8 @@ pub struct PropNameCasing(Box<Config>);
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct Options {
     /// Prop names to ignore, as regular expression patterns.
-    #[serde(default, deserialize_with = "deserialize_regex_vec")]
+    #[serde(default, deserialize_with = "deserialize_bytes_regex_vec")]
+    #[schemars(with = "Vec<lazy_regex::Regex>")]
     ignore_props: Vec<Regex>,
 }
 
@@ -161,7 +167,7 @@ impl PropNameCasing {
     fn check_array_props<'a>(&self, arr: &ArrayExpression<'a>, ctx: &LintContext<'a>) {
         for element in &arr.elements {
             let ArrayExpressionElement::StringLiteral(lit) = element else { continue };
-            self.report_if_invalid(lit.value.as_str(), lit.span, ctx);
+            self.report_if_invalid(lit.value, lit.span, ctx);
         }
     }
 
@@ -169,25 +175,21 @@ impl PropNameCasing {
         for prop in &obj.properties {
             let ObjectPropertyKind::ObjectProperty(prop) = prop else { continue };
             let Some((name, span)) = property_key_static_name(&prop.key) else { continue };
-            self.report_if_invalid(name.as_ref(), span, ctx);
+            self.report_if_invalid(name.as_js_str(), span, ctx);
         }
     }
 
     fn check_signature<'a>(&self, signature: &TSSignature<'a>, ctx: &LintContext<'a>) {
         let (key_opt, span) = match signature {
-            TSSignature::TSPropertySignature(sig) => {
-                (sig.key.static_name().and_then(oxc_ast::StaticName::into_utf8), sig.key.span())
-            }
-            TSSignature::TSMethodSignature(sig) => {
-                (sig.key.static_name().and_then(oxc_ast::StaticName::into_utf8), sig.key.span())
-            }
+            TSSignature::TSPropertySignature(sig) => (sig.key.static_name(), sig.key.span()),
+            TSSignature::TSMethodSignature(sig) => (sig.key.static_name(), sig.key.span()),
             _ => return,
         };
         let Some(name) = key_opt else { return };
-        self.report_if_invalid(name.as_ref(), span, ctx);
+        self.report_if_invalid(name.as_js_str(), span, ctx);
     }
 
-    fn report_if_invalid(&self, name: &str, span: Span, ctx: &LintContext<'_>) {
+    fn report_if_invalid(&self, name: JSStr<'_>, span: Span, ctx: &LintContext<'_>) {
         let Config(case_type, options) = &*self.0;
         if is_ignored(name, &options.ignore_props) {
             return;
@@ -195,16 +197,18 @@ impl PropNameCasing {
         if check_case(name, *case_type) {
             return;
         }
-        ctx.diagnostic(prop_name_casing_diagnostic(span, name, case_type.as_str()));
+        ctx.diagnostic(prop_name_casing_diagnostic(
+            span,
+            StaticName::Borrowed(name),
+            case_type.as_str(),
+        ));
     }
 }
 
 /// Returns `(static_name, span_of_key_text)` for a property key when it can be
 /// resolved statically. Dynamic keys (computed identifiers, calls, binary
 /// expressions, etc.) return `None`.
-fn property_key_static_name<'a>(
-    key: &PropertyKey<'a>,
-) -> Option<(std::borrow::Cow<'a, str>, Span)> {
+fn property_key_static_name<'a>(key: &PropertyKey<'a>) -> Option<(StaticName<'a>, Span)> {
     match key {
         PropertyKey::StaticIdentifier(ident) => Some((ident.name.as_str().into(), ident.span)),
         PropertyKey::PrivateIdentifier(_) => None,
@@ -215,13 +219,13 @@ fn property_key_static_name<'a>(
             // unresolvable and skipped.
             let expr = key.as_expression()?.get_inner_expression();
             match expr {
-                Expression::StringLiteral(lit) => Some((lit.value.as_str().into(), lit.span)),
+                Expression::StringLiteral(lit) => Some((lit.value.into(), lit.span)),
                 Expression::TemplateLiteral(tpl)
                     if tpl.expressions.is_empty() && tpl.quasis.len() == 1 =>
                 {
                     let quasi = tpl.quasis.first()?;
                     let cooked = quasi.value.cooked.as_ref()?;
-                    Some((cooked.as_str().into(), tpl.span))
+                    Some(((*cooked).into(), tpl.span))
                 }
                 Expression::RegExpLiteral(regex) => {
                     Some((regex.raw.as_ref()?.as_str().into(), regex.span))
@@ -232,15 +236,15 @@ fn property_key_static_name<'a>(
     }
 }
 
-fn check_case(s: &str, case_type: CaseType) -> bool {
+fn check_case(s: JSStr<'_>, case_type: CaseType) -> bool {
     match case_type {
         CaseType::CamelCase => vue_casing::is_camel_case(s),
         CaseType::SnakeCase => vue_casing::is_snake_case(s),
     }
 }
 
-fn is_ignored(name: &str, ignore_props: &[Regex]) -> bool {
-    ignore_props.iter().any(|regex| regex.is_match(name))
+fn is_ignored(name: JSStr<'_>, ignore_props: &[Regex]) -> bool {
+    ignore_props.iter().any(|regex| regex.is_match(name.as_wtf8()))
 }
 
 #[test]

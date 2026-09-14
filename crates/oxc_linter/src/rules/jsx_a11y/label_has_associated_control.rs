@@ -15,7 +15,7 @@ use crate::{
     AstNode,
     context::LintContext,
     rule::Rule,
-    utils::{get_element_type, get_jsx_attribute_name, has_jsx_prop, is_react_component_name},
+    utils::{get_element_type, get_jsx_attribute_name, has_jsx_prop},
 };
 
 fn label_has_associated_control_diagnostic(span: Span) -> OxcDiagnostic {
@@ -197,7 +197,9 @@ impl Rule for LabelHasAssociatedControl {
             return;
         };
 
-        let element_type = get_element_type(ctx, &element.opening_element);
+        let Some(element_type) = get_element_type(ctx, &element.opening_element).into_utf8() else {
+            return;
+        };
 
         if self.label_components.binary_search(&element_type.into()).is_err() {
             return;
@@ -248,12 +250,12 @@ impl Rule for LabelHasAssociatedControl {
 }
 
 impl LabelHasAssociatedControl {
-    fn is_match_control_components(&self, name: &str) -> bool {
-        DEFAULT_CONTROL_COMPONENTS.contains(&name)
+    fn is_match_control_components(&self, name: oxc_str::JSStr<'_>) -> bool {
+        name.as_str().is_some_and(|name| DEFAULT_CONTROL_COMPONENTS.contains(&name))
             || self
                 .control_components
                 .iter()
-                .any(|component| fast_glob::glob_match(component.as_str(), name))
+                .any(|component| fast_glob::glob_match(component.as_bytes(), name.as_wtf8()))
     }
 
     fn has_accessible_label<'a>(&self, root: &JSXElement<'a>, ctx: &LintContext<'a>) -> bool {
@@ -300,7 +302,7 @@ impl LabelHasAssociatedControl {
             JSXChild::ExpressionContainer(_) => true,
             JSXChild::Element(element) => {
                 let element_type = get_element_type(ctx, &element.opening_element);
-                if self.is_match_control_components(element_type.as_ref()) {
+                if self.is_match_control_components(element_type.as_js_str()) {
                     return true;
                 }
 
@@ -346,9 +348,10 @@ impl LabelHasAssociatedControl {
                                 attribute.is_identifier(labelling_prop)
                                     && attribute.value.as_ref().is_some_and(|attribute_value| {
                                         match attribute_value {
-                                            JSXAttributeValue::StringLiteral(literal) => {
-                                                !literal.value.as_str().trim().is_empty()
-                                            }
+                                            JSXAttributeValue::StringLiteral(literal) => literal
+                                                .value
+                                                .as_str()
+                                                .is_none_or(|value| !value.trim().is_empty()),
                                             _ => true,
                                         }
                                     })
@@ -363,8 +366,13 @@ impl LabelHasAssociatedControl {
 
                 if element.children.is_empty() {
                     let name = get_element_type(ctx, &element.opening_element);
-                    if is_react_component_name(&name)
-                        && !self.is_match_control_components(name.as_ref())
+                    if name
+                        .as_js_str()
+                        .chars()
+                        .next()
+                        .and_then(oxc_str::JSChar::to_char)
+                        .is_some_and(|ch| ch.is_ascii_uppercase())
+                        && !self.is_match_control_components(name.as_js_str())
                     {
                         return true;
                     }

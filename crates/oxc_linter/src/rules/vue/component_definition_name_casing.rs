@@ -8,6 +8,7 @@ use oxc_ast::{
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_span::{GetSpan, Span};
+use oxc_str::JSStr;
 
 use crate::{
     AstNode,
@@ -19,7 +20,7 @@ use crate::{
 
 fn component_definition_name_casing_diagnostic(
     span: Span,
-    value: &str,
+    value: impl std::fmt::Display,
     case_type: &str,
 ) -> OxcDiagnostic {
     OxcDiagnostic::warn(format!("Property name \"{value}\" is not {case_type}.")).with_label(span)
@@ -120,7 +121,10 @@ impl ComponentDefinitionNameCasing {
         // `Vue.component('Name', ...)` / `app.component('Name', ...)` /
         // `(Vue as VueConstructor<Vue>).component('Name', ...)`
         if let Some(member_expr) = call.callee.get_inner_expression().as_member_expression()
-            && member_expr.static_property_name().is_some_and(|prop_name| prop_name == "component")
+            && member_expr
+                .static_property_name()
+                .and_then(oxc_str::JSStr::as_str)
+                .is_some_and(|prop_name| prop_name == "component")
             && call.arguments.len() == 2
             && let Some(first_arg) = call.arguments.first()
             && let Some(first_expr) = first_arg.as_expression()
@@ -147,16 +151,19 @@ impl ComponentDefinitionNameCasing {
         let Some((value, inner_span)) = extract_convertible(inner) else { return };
 
         let case_type = self.0;
-        if check_case(&value, case_type) {
+        if check_case(value, case_type) {
             return;
         }
 
         let report_span = inner.span();
         let case_type_str = case_type.as_str();
-        let diagnostic =
-            component_definition_name_casing_diagnostic(report_span, value.as_str(), case_type_str);
+        let diagnostic = component_definition_name_casing_diagnostic(
+            report_span,
+            oxc_ast::StaticName::from(value),
+            case_type_str,
+        );
 
-        if let Some(converted) = exact_convert(&value, case_type) {
+        if let Some(converted) = value.as_str().and_then(|value| exact_convert(value, case_type)) {
             ctx.diagnostic_with_fix(diagnostic, |fixer| fixer.replace(inner_span, converted));
         } else {
             ctx.diagnostic(diagnostic);
@@ -168,11 +175,11 @@ impl ComponentDefinitionNameCasing {
 /// simple template literal (no expressions, single quasi). `inner_span`
 /// is the range of the literal *contents* (excluding the quotes / backticks),
 /// suitable as a fix target.
-fn extract_convertible(expr: &Expression<'_>) -> Option<(String, Span)> {
+fn extract_convertible<'a>(expr: &Expression<'a>) -> Option<(JSStr<'a>, Span)> {
     match expr {
         Expression::StringLiteral(lit) => {
             let inner = Span::new(lit.span.start + 1, lit.span.end - 1);
-            Some((lit.value.to_string(), inner))
+            Some((lit.value, inner))
         }
         Expression::TemplateLiteral(tpl) => {
             if !tpl.expressions.is_empty() || tpl.quasis.len() != 1 {
@@ -181,13 +188,13 @@ fn extract_convertible(expr: &Expression<'_>) -> Option<(String, Span)> {
             let quasi = tpl.quasis.first()?;
             let cooked = quasi.value.cooked.as_ref()?;
             let inner = Span::new(tpl.span.start + 1, tpl.span.end - 1);
-            Some((cooked.to_string(), inner))
+            Some((*cooked, inner))
         }
         _ => None,
     }
 }
 
-fn check_case(s: &str, case_type: CaseType) -> bool {
+fn check_case(s: JSStr<'_>, case_type: CaseType) -> bool {
     match case_type {
         CaseType::PascalCase => vue_casing::is_pascal_case(s),
         CaseType::KebabCase => vue_casing::is_kebab_case(s),
@@ -204,7 +211,7 @@ fn exact_convert(s: &str, case_type: CaseType) -> Option<String> {
         CaseType::PascalCase => vue_casing::pascal_case(s),
         CaseType::KebabCase => vue_casing::kebab_case(s),
     };
-    if check_case(&converted, case_type) { Some(converted) } else { None }
+    if check_case(converted.as_str().into(), case_type) { Some(converted) } else { None }
 }
 
 #[test]
@@ -592,4 +599,29 @@ fn test() {
     )
     .expect_fix(fix)
     .test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr_names() {
+    use crate::tester::Tester;
+    let pass = vec![r#"app.component("Foo", {});"#];
+    let fail = vec![
+        r#"app.component("foo", {});"#,
+        r#"app.component("foo\uD800", {});"#,
+        r#"app.component("foo\uDC00", {});"#,
+        r#"app.component("foo\uD800\uDC00", {});"#,
+    ];
+    let fix = vec![
+        (fail[0], r#"app.component("Foo", {});"#, None),
+        (fail[1], fail[1], None),
+        (fail[2], fail[2], None),
+    ];
+    Tester::new(
+        ComponentDefinitionNameCasing::NAME,
+        ComponentDefinitionNameCasing::PLUGIN,
+        pass,
+        fail,
+    )
+    .expect_fix(fix)
+    .test();
 }

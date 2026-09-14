@@ -114,7 +114,7 @@ impl NoRegexSpaces {
         let Some(Argument::StringLiteral(pattern)) = args.first() else {
             return None;
         };
-        if !Self::has_double_space(&pattern.value) {
+        if !pattern.value.contains("  ") {
             return None;
         }
 
@@ -198,6 +198,8 @@ fn test() {
     use crate::tester::Tester;
 
     let pass = vec![
+        r#"new RegExp("\uD800a b")"#,
+        r#"new RegExp("\uDC00a b")"#,
         "var foo = /foo/;",
         "var foo = RegExp('foo')",
         "var foo = / /;",
@@ -249,6 +251,9 @@ fn test() {
     ];
 
     let fail = vec![
+        r#"new RegExp("\uD800a  b")"#,
+        r#"new RegExp("\uDC00a  b")"#,
+        r#"new RegExp("\uD800\uDC00a  b")"#,
         "var foo = /  /;",
         "var foo = /bar  baz/;",
         "var foo = /bar    baz/;",

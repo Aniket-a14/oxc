@@ -140,7 +140,7 @@ fn diagnostic_call_expr<'a>(expr: &'a CallExpression<'a>, ctx: &LintContext) {
             return;
         };
 
-        JasmineProperty::from_str(property_name).map_or_else(
+        property_name.as_str().and_then(JasmineProperty::from_str).map_or_else(
             || {
                 ctx.diagnostic(no_jasmine_globals_diagnostic(
                     COMMON_ERROR_TEXT,
@@ -163,7 +163,9 @@ fn diagnostic_call_expr<'a>(expr: &'a CallExpression<'a>, ctx: &LintContext) {
     }
 }
 
-fn get_jasmine_property_name<'a>(member_expr: &'a MemberExpression<'a>) -> Option<(Span, &'a str)> {
+fn get_jasmine_property_name<'a>(
+    member_expr: &'a MemberExpression<'a>,
+) -> Option<(Span, oxc_str::JSStr<'a>)> {
     let name = match member_expr.object() {
         Expression::Identifier(ident) => Some(ident.name.as_str()),
         _ => None,
@@ -329,4 +331,20 @@ fn test() {
         .with_jest_plugin(true)
         .expect_fix(fix)
         .test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr_properties() {
+    use crate::tester::Tester;
+    let pass = vec![r#"object["\uD800"]();"#];
+    let fail = vec![
+        r#"jasmine["unknown"]();"#,
+        r#"jasmine["\uD800"]();"#,
+        r#"jasmine["\uDC00"] = 1;"#,
+        r#"jasmine["\uD800\uDC00"]();"#,
+    ];
+    let fixes = fail.iter().map(|source| (*source, *source, None)).collect();
+    Tester::new(NoJasmineGlobals::NAME, NoJasmineGlobals::PLUGIN, pass, fail)
+        .expect_fix(fixes)
+        .test();
 }

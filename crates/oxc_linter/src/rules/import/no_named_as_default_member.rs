@@ -14,7 +14,7 @@ fn no_named_as_default_member_diagnostic(
     span: Span,
     module_name: &str,
     export_name: &str,
-    suggested_module_name: &str,
+    suggested_module_name: impl std::fmt::Debug,
 ) -> OxcDiagnostic {
     OxcDiagnostic::warn(format!("{module_name:?} also has a named export {export_name:?}"))
         .with_help(format!("Check if you meant to write `import {{ {export_name} }} from {suggested_module_name:?}`"))
@@ -129,7 +129,7 @@ impl Rule for NoNamedAsDefaultMember {
                         continue;
                     };
                     let Some(prop_str) =
-                        member_expr_kind.static_property_name().map(|n| n.as_str())
+                        member_expr_kind.static_property_name().and_then(oxc_str::JSStr::as_str)
                     else {
                         continue;
                     };

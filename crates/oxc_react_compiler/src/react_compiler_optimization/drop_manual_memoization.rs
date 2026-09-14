@@ -630,11 +630,15 @@ fn get_hook_detection_name<'a>(binding: &NonLocalBinding<'a>) -> Option<&'a str>
     match binding {
         NonLocalBinding::Global { name } => Some(name.as_str()),
         NonLocalBinding::ImportSpecifier { imported, module, .. } => {
-            if is_known_react_module(module) { Some(imported.as_str()) } else { None }
+            if module.as_str().is_some_and(is_known_react_module) {
+                Some(imported.as_str())
+            } else {
+                None
+            }
         }
         NonLocalBinding::ImportDefault { name, module }
         | NonLocalBinding::ImportNamespace { name, module } => {
-            if is_known_react_module(module) {
+            if module.as_str().is_some_and(is_known_react_module) {
                 Some(name.as_str())
             } else {
                 None

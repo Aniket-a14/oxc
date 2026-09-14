@@ -1,0 +1,17 @@
+---
+source: crates/oxc_linter/src/tester.rs
+---
+
+  ⚠ unicorn(no-accessor-recursion): Disallow recursive access to `this` within getters.
+   ╭─[no_accessor_recursion.tsx:1:34]
+ 1 │ class C { get "\uD800"() {return this["\ud800"];} }
+   ·                                  ──────────────
+   ╰────
+  help: Remove this property access, or remove `get` from the method
+
+  ⚠ unicorn(no-accessor-recursion): Disallow recursive access to `this` within setters.
+   ╭─[no_accessor_recursion.tsx:1:28]
+ 1 │ class C { set "\uDC00"(v) {this["\udc00"] = v;} }
+   ·                            ──────────────
+   ╰────
+  help: Remove this property access, or remove `set` from the method

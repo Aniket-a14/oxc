@@ -1,0 +1,17 @@
+---
+source: crates/oxc_linter/src/tester.rs
+---
+
+  ⚠ unicorn(prefer-ternary): Prefer ternary expressions over simple `if-else` statements.
+   ╭─[prefer_ternary.tsx:1:1]
+ 1 │ if (x) {o["\uD800"] = 1;} else {o["\ud800"] = 2;}
+   · ─────────────────────────────────────────────────
+   ╰────
+  help: Rewrite this `if`/`else` as a ternary expression.
+
+  ⚠ unicorn(prefer-ternary): Prefer ternary expressions over simple `if-else` statements.
+   ╭─[prefer_ternary.tsx:1:1]
+ 1 │ if (x) {o["a" + "\uDC00"] = 1;} else {o[`a\udc00`] = 2;}
+   · ────────────────────────────────────────────────────────
+   ╰────
+  help: Rewrite this `if`/`else` as a ternary expression.

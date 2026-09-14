@@ -26,27 +26,27 @@ source: crates/oxc_linter/src/tester.rs
    ╰────
   help: Merge these imports into a single import statement
 
-  ⚠ import(no-duplicates): Module './bar?optionY' is imported more than once in this file
-   ╭─[index.ts:1:46]
+  ⚠ import(no-duplicates): Module './bar?optionX' is imported more than once in this file
+   ╭─[index.ts:1:15]
  1 │ import x from './bar?optionX'; import y from './bar?optionY';
-   ·               ───────────────                ───────┬───────
-   ·                      │                              ╰── It is first imported here
+   ·               ───────┬───────                ───────────────
+   ·                      ╰── It is first imported here
    ╰────
   help: Merge these imports into a single import statement
 
-  ⚠ import(no-duplicates): Module './bar.js?optionX' is imported more than once in this file
-   ╭─[index.ts:1:46]
+  ⚠ import(no-duplicates): Module './bar?optionX' is imported more than once in this file
+   ╭─[index.ts:1:15]
  1 │ import x from './bar?optionX'; import y from './bar.js?optionX';
-   ·               ───────────────                ─────────┬────────
-   ·                      │                                ╰── It is first imported here
+   ·               ───────┬───────                ──────────────────
+   ·                      ╰── It is first imported here
    ╰────
   help: Merge these imports into a single import statement
 
-  ⚠ import(no-duplicates): Module './bar.js?optionX' is imported more than once in this file
-   ╭─[index.ts:1:46]
+  ⚠ import(no-duplicates): Module './bar?optionX' is imported more than once in this file
+   ╭─[index.ts:1:15]
  1 │ import x from './bar?optionX'; import y from './bar.js?optionX';
-   ·               ───────────────                ─────────┬────────
-   ·                      │                                ╰── It is first imported here
+   ·               ───────┬───────                ──────────────────
+   ·                      ╰── It is first imported here
    ╰────
   help: Merge these imports into a single import statement
 

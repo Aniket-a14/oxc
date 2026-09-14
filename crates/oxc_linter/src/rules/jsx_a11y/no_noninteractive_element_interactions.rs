@@ -9,6 +9,7 @@ use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_span::{GetSpan, Span};
 use oxc_str::CompactStr;
+use oxc_str::JSStr;
 use rustc_hash::FxHashMap;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -154,7 +155,7 @@ impl Rule for NoNoninteractiveElementInteractions {
             return;
         };
 
-        let element_type = get_element_type(ctx, jsx_el);
+        let Some(element_type) = get_element_type(ctx, jsx_el).into_utf8() else { return };
         if !HTML_TAG.contains(element_type.as_ref()) {
             return;
         }
@@ -166,7 +167,7 @@ impl Rule for NoNoninteractiveElementInteractions {
         let role_value = role_value(jsx_el);
         if is_content_editable(jsx_el)
             || is_hidden_from_screen_reader(ctx, jsx_el)
-            || role_value.is_some_and(|role| {
+            || role_value.and_then(JSStr::as_str).is_some_and(|role| {
                 let role = role.cow_to_lowercase();
                 matches!(role.as_ref(), "presentation" | "none")
             })
@@ -174,7 +175,7 @@ impl Rule for NoNoninteractiveElementInteractions {
             return;
         }
 
-        if role_value.is_some_and(|role| {
+        if role_value.and_then(JSStr::as_str).is_some_and(|role| {
             let role = role.cow_to_lowercase();
             is_abstract_role_name(role.as_ref())
         }) {
@@ -253,12 +254,12 @@ fn is_content_editable(jsx_el: &JSXOpeningElement) -> bool {
         .is_some_and(|value| value == "true")
 }
 
-fn role_value<'b>(jsx_el: &'b JSXOpeningElement<'_>) -> Option<&'b str> {
+fn role_value<'a>(jsx_el: &JSXOpeningElement<'a>) -> Option<JSStr<'a>> {
     has_jsx_prop_ignore_case(jsx_el, "role").and_then(get_prop_value).and_then(
         |value| match value {
-            JSXAttributeValue::StringLiteral(role) => Some(role.value.as_str()),
+            JSXAttributeValue::StringLiteral(role) => Some(role.value),
             JSXAttributeValue::ExpressionContainer(container) => match &container.expression {
-                JSXExpression::StringLiteral(role) => Some(role.value.as_str()),
+                JSXExpression::StringLiteral(role) => Some(role.value),
                 _ => None,
             },
             _ => None,
@@ -308,14 +309,14 @@ fn is_focusable(jsx_el: &JSXOpeningElement, element_type: &str) -> bool {
             has_jsx_prop_ignore_case(jsx_el, "disabled").is_none()
                 && !has_jsx_prop_ignore_case(jsx_el, "type")
                     .and_then(get_string_literal_prop_value)
-                    .is_some_and(|value| value.eq_ignore_ascii_case("hidden"))
+                    .is_some_and(|value| value.eq_ignore_ascii_case("hidden".into()))
         }
         _ => false,
     }
 }
 
-fn first_recognized_role(role_value: &str) -> Option<Cow<'_, str>> {
-    role_value.split_whitespace().find_map(|role| {
+fn first_recognized_role(role_value: JSStr<'_>) -> Option<Cow<'_, str>> {
+    role_value.split_whitespace().filter_map(JSStr::as_str).find_map(|role| {
         let role = role.cow_to_lowercase();
         is_recognized_role(role.as_ref()).then_some(role)
     })

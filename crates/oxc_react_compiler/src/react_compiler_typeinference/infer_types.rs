@@ -15,10 +15,10 @@ use rustc_hash::FxHashMap;
 use oxc_allocator::Allocator;
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_index::{IndexSlice, IndexVec};
-use oxc_str::{Ident, format_ident};
+use oxc_str::{Ident, JSStr, format_ident};
 
 use crate::diagnostics;
-use crate::react_compiler_hir::environment::{Environment, is_hook_name};
+use crate::react_compiler_hir::environment::{Environment, is_hook_property_name};
 use crate::react_compiler_hir::object_shape::{
     BUILT_IN_ARRAY_ID, BUILT_IN_FUNCTION_ID, BUILT_IN_JSX_ID, BUILT_IN_MIXED_READONLY_ID,
     BUILT_IN_OBJECT_ID, BUILT_IN_PROPS_ID, BUILT_IN_REF_VALUE_ID, BUILT_IN_SET_STATE_ID,
@@ -183,7 +183,7 @@ fn resolve_property_type<'a>(
             if let Some(hook_type) = custom_hook_type
                 && let PropertyNameKind::Literal { value: PropertyLiteral::String(s) } =
                     property_name
-                && is_hook_name(s)
+                && is_hook_property_name(*s)
             {
                 return Some(hook_type.clone());
             }
@@ -196,7 +196,7 @@ fn resolve_property_type<'a>(
             // Object/Function with no shapeId: TS getPropertyType falls through
             // to hook-name check, TS getFallthroughPropertyType returns null
             if let PropertyNameKind::Literal { value: PropertyLiteral::String(s) } = property_name
-                && is_hook_name(s)
+                && is_hook_property_name(*s)
             {
                 return custom_hook_type.cloned();
             }
@@ -207,14 +207,16 @@ fn resolve_property_type<'a>(
 
     match property_name {
         PropertyNameKind::Literal { value } => match value {
-            PropertyLiteral::String(s) => shape
-                .properties
-                .get(s.as_str())
+            PropertyLiteral::String(s) => s
+                .as_str()
+                .and_then(|name| shape.properties.get(name))
                 .or_else(|| shape.properties.get("*"))
                 .cloned()
                 // Hook-name fallback: if property is not found in shape but looks
                 // like a hook name, return the custom hook type
-                .or_else(|| if is_hook_name(s) { custom_hook_type.cloned() } else { None }),
+                .or_else(
+                    || if is_hook_property_name(*s) { custom_hook_type.cloned() } else { None },
+                ),
             PropertyLiteral::Number(_) => shape.properties.get("*").cloned(),
         },
         PropertyNameKind::Computed => shape.properties.get("*").cloned(),
@@ -645,9 +647,9 @@ fn generate_instruction_types<'a>(
                                     object_type: Box::new(value_type),
                                     object_name,
                                     property_name: PropertyNameKind::Literal {
-                                        value: PropertyLiteral::String(format_ident!(
-                                            allocator, "{i}"
-                                        )),
+                                        value: PropertyLiteral::String(
+                                            format_ident!(allocator, "{i}").into(),
+                                        ),
                                     },
                                 },
                                 shapes,
@@ -670,26 +672,26 @@ fn generate_instruction_types<'a>(
             Pattern::Object(object_pattern) => {
                 for prop in &object_pattern.properties {
                     if let ObjectPropertyOrSpread::Property(obj_prop) = prop {
-                        match &obj_prop.key {
-                            ObjectPropertyKey::Identifier { name, .. }
-                            | ObjectPropertyKey::String { name, .. } => {
-                                let prop_place_type =
-                                    get_type(obj_prop.place.identifier, identifiers);
-                                let value_type = get_type(value.identifier, identifiers);
-                                let object_name = get_name(names, value.identifier);
-                                unifier.unify(
-                                    prop_place_type,
-                                    Type::Property {
-                                        object_type: Box::new(value_type),
-                                        object_name,
-                                        property_name: PropertyNameKind::Literal {
-                                            value: PropertyLiteral::String(*name),
-                                        },
+                        let name = match &obj_prop.key {
+                            ObjectPropertyKey::Identifier { name, .. } => JSStr::from(*name),
+                            ObjectPropertyKey::String { name, .. } => *name,
+                            _ => continue,
+                        };
+                        {
+                            let prop_place_type = get_type(obj_prop.place.identifier, identifiers);
+                            let value_type = get_type(value.identifier, identifiers);
+                            let object_name = get_name(names, value.identifier);
+                            unifier.unify(
+                                prop_place_type,
+                                Type::Property {
+                                    object_type: Box::new(value_type),
+                                    object_name,
+                                    property_name: PropertyNameKind::Literal {
+                                        value: PropertyLiteral::String(name),
                                     },
-                                    shapes,
-                                )?;
-                            }
-                            _ => {}
+                                },
+                                shapes,
+                            )?;
                         }
                     }
                 }

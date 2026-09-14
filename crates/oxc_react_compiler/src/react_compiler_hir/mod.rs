@@ -25,7 +25,7 @@ pub(crate) use assert_valid_block_nesting::{get_scopes, recursively_traverse_ite
 use oxc_allocator::{Allocator, CloneIn, CloneInSemanticIds, Vec as ArenaVec};
 use oxc_ast::ast::*;
 use oxc_index::define_nonmax_u32_index_type;
-use oxc_str::{Ident, Str};
+use oxc_str::{Ident, JSStr, Str};
 use oxc_syntax::number::ToJsString;
 pub use raw::RawTypeCategory;
 pub use reactive::*;
@@ -236,7 +236,8 @@ impl HirFunction<'_> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct FunctionDirective<'a> {
-    pub value: Str<'a>,
+    pub value: JSStr<'a>,
+    pub raw: Str<'a>,
     pub span: Span,
     pub expression_span: Span,
 }
@@ -691,7 +692,7 @@ pub enum InstructionValue<'a> {
         span: Option<Span>,
     },
     JSXText {
-        value: Str<'a>,
+        value: JSStr<'a>,
         span: Option<Span>,
     },
     BinaryExpression {
@@ -962,7 +963,7 @@ pub enum PrimitiveValue<'a> {
     Undefined,
     Boolean(bool),
     Number(FloatValue),
-    String(Str<'a>),
+    String(JSStr<'a>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -998,7 +999,7 @@ pub enum FunctionExpressionType {
 #[derive(Debug, Clone, Copy)]
 pub struct TemplateQuasi<'a> {
     pub raw: Str<'a>,
-    pub cooked: Option<Str<'a>>,
+    pub cooked: Option<JSStr<'a>>,
     pub span: Span,
 }
 
@@ -1168,7 +1169,7 @@ pub struct ObjectProperty<'a> {
 
 #[derive(Debug, Clone, Copy)]
 pub enum ObjectPropertyKey<'a> {
-    String { name: Ident<'a>, span: Option<Span> },
+    String { name: JSStr<'a>, span: Option<Span> },
     Identifier { name: Ident<'a>, span: Option<Span> },
     Computed { name: Place, span: Option<Span> },
 }
@@ -1200,7 +1201,7 @@ impl std::fmt::Display for ObjectPropertyType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PropertyLiteral<'a> {
-    String(Ident<'a>),
+    String(JSStr<'a>),
     Number(FloatValue),
 }
 
@@ -1213,7 +1214,7 @@ impl PropertyLiteral<'_> {
 impl std::fmt::Display for PropertyLiteral<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PropertyLiteral::String(s) => write!(f, "{}", s),
+            PropertyLiteral::String(s) => write!(f, "{}", oxc_ast::StaticName::Borrowed(*s)),
             PropertyLiteral::Number(n) => write!(f, "{}", n),
         }
     }
@@ -1274,17 +1275,17 @@ pub enum BindingKind {
 pub enum VariableBinding<'a> {
     Identifier { identifier: IdentifierId, binding_kind: BindingKind },
     Global { name: Ident<'a> },
-    ImportDefault { name: Ident<'a>, module: Str<'a> },
-    ImportSpecifier { name: Ident<'a>, module: Str<'a>, imported: Ident<'a> },
-    ImportNamespace { name: Ident<'a>, module: Str<'a> },
+    ImportDefault { name: Ident<'a>, module: JSStr<'a> },
+    ImportSpecifier { name: Ident<'a>, module: JSStr<'a>, imported: Ident<'a> },
+    ImportNamespace { name: Ident<'a>, module: JSStr<'a> },
     ModuleLocal { name: Ident<'a> },
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum NonLocalBinding<'a> {
-    ImportDefault { name: Ident<'a>, module: Str<'a> },
-    ImportSpecifier { name: Ident<'a>, module: Str<'a>, imported: Ident<'a> },
-    ImportNamespace { name: Ident<'a>, module: Str<'a> },
+    ImportDefault { name: Ident<'a>, module: JSStr<'a> },
+    ImportSpecifier { name: Ident<'a>, module: JSStr<'a>, imported: Ident<'a> },
+    ImportNamespace { name: Ident<'a>, module: JSStr<'a> },
     ModuleLocal { name: Ident<'a> },
     Global { name: Ident<'a> },
 }
@@ -1572,6 +1573,7 @@ impl<'a> CloneIn<'a> for FunctionDirective<'a> {
     type Cloned = FunctionDirective<'a>;
     fn clone_in_impl(&self, sem: CloneInSemanticIds, alloc: &'a Allocator) -> Self {
         FunctionDirective {
+            raw: self.raw.clone_in_impl(sem, alloc),
             value: self.value.clone_in_impl(sem, alloc),
             span: self.span,
             expression_span: self.expression_span,

@@ -613,7 +613,7 @@ fn emit_destructure_props<'a>(
     let mut properties = ArenaVec::new_in(&env.allocator);
     for prop in old_to_new_props.values() {
         properties.push(ObjectPropertyOrSpread::Property(ObjectProperty {
-            key: ObjectPropertyKey::String { name: prop.new_name, span: None },
+            key: ObjectPropertyKey::String { name: prop.new_name.into(), span: None },
             property_type: ObjectPropertyType::Property,
             place: prop.place,
         }));

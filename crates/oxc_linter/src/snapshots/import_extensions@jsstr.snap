@@ -1,0 +1,31 @@
+---
+source: crates/oxc_linter/src/tester.rs
+---
+
+  ⚠ import(extensions): Missing file extension in import declaration.
+   ╭─[extensions.tsx:1:1]
+ 1 │ import "./x\uD800";
+   · ───────────────────
+   ╰────
+  help: Add a file extension to this import.
+
+  ⚠ import(extensions): File extension "js" should not be included in the import declaration.
+   ╭─[extensions.tsx:1:1]
+ 1 │ import "./x\uD800.js";
+   · ──────────────────────
+   ╰────
+  help: Remove the file extension from this import.
+
+  ⚠ import(extensions): File extension "js" should not be included in the import declaration.
+   ╭─[extensions.tsx:1:1]
+ 1 │ import "./x\uDC00.JS?query";
+   · ────────────────────────────
+   ╰────
+  help: Remove the file extension from this import.
+
+  ⚠ import(extensions): File extension "\uD800" should not be included in the import declaration.
+   ╭─[extensions.tsx:1:1]
+ 1 │ import "./x.\uD800";
+   · ────────────────────
+   ╰────
+  help: Remove the file extension from this import.

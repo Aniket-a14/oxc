@@ -17,7 +17,11 @@ use crate::{
     rule::{DefaultRuleConfig, Rule},
 };
 
-fn no_export(span: Span, specifier_name: &str, namespace_name: &str) -> OxcDiagnostic {
+fn no_export(
+    span: Span,
+    specifier_name: impl std::fmt::Debug,
+    namespace_name: impl std::fmt::Debug,
+) -> OxcDiagnostic {
     OxcDiagnostic::warn(format!(
         "{specifier_name:?} not found in imported namespace {namespace_name:?}."
     ))
@@ -26,8 +30,8 @@ fn no_export(span: Span, specifier_name: &str, namespace_name: &str) -> OxcDiagn
 
 fn no_export_in_deeply_imported_namespace(
     span: Span,
-    specifier_name: &str,
-    namespace_name: &str,
+    specifier_name: impl std::fmt::Debug,
+    namespace_name: impl std::fmt::Debug,
 ) -> OxcDiagnostic {
     OxcDiagnostic::warn(format!(
         "{specifier_name:?} not found in deeply imported namespace {namespace_name:?}."
@@ -35,7 +39,7 @@ fn no_export_in_deeply_imported_namespace(
     .with_label(span)
 }
 
-fn computed_reference(span: Span, namespace_name: &str) -> OxcDiagnostic {
+fn computed_reference(span: Span, namespace_name: impl std::fmt::Debug) -> OxcDiagnostic {
     OxcDiagnostic::warn(format!(
         "Unable to validate computed reference to imported namespace {namespace_name:?}."
     ))
@@ -43,7 +47,7 @@ fn computed_reference(span: Span, namespace_name: &str) -> OxcDiagnostic {
     .with_label(span)
 }
 
-fn assignment(span: Span, namespace_name: &str) -> OxcDiagnostic {
+fn assignment(span: Span, namespace_name: impl std::fmt::Debug) -> OxcDiagnostic {
     OxcDiagnostic::warn(format!("Assignment to member of namespace {namespace_name:?}.'"))
         .with_help("Imported namespace members are read-only. Assign to a local variable instead.")
         .with_label(span)
@@ -134,7 +138,7 @@ impl Rule for Namespace {
                     let Some(module) = module_record.get_loaded_module(source) else {
                         continue;
                     };
-                    (source.to_string(), module)
+                    (entry.module_request.name.clone(), module)
                 }
                 ImportImportName::Name(name) => {
                     let Some(loaded_module) =
@@ -145,8 +149,7 @@ impl Rule for Namespace {
                     let Some(source) = get_module_request_name(name.name(), &loaded_module) else {
                         continue;
                     };
-                    let Some(loaded_module_for_source) =
-                        loaded_module.get_loaded_module(source.as_str())
+                    let Some(loaded_module_for_source) = loaded_module.get_loaded_module(&source)
                     else {
                         continue;
                     };
@@ -200,8 +203,8 @@ impl Rule for Namespace {
                     }
                     AstKind::JSXMemberExpression(expr) => {
                         check_binding_exported(
-                            &expr.property.name,
-                            || no_export(expr.property.span, &expr.property.name, &source),
+                            expr.property.name.into(),
+                            || no_export(expr.property.span, expr.property.name, &source),
                             &module,
                             ctx,
                         );
@@ -238,7 +241,10 @@ impl Rule for Namespace {
 /// ```
 /// b is a namespace in b.js so the return value is Some("./c")
 ///
-fn get_module_request_name(name: &str, module_record: &ModuleRecord) -> Option<String> {
+fn get_module_request_name(
+    name: &str,
+    module_record: &ModuleRecord,
+) -> Option<crate::module_record::ModuleSpecifier> {
     if let Some(entry) =
         module_record.indirect_export_entries.iter().find(|e| match &e.import_name {
             ExportImportName::All => {
@@ -257,41 +263,46 @@ fn get_module_request_name(name: &str, module_record: &ModuleRecord) -> Option<S
             _ => false,
         })
     {
-        return entry.module_request.as_ref().map(|name| name.name().to_string());
+        return entry.module_request.as_ref().map(|name| name.name.clone());
     }
 
     module_record
         .import_entries
         .iter()
         .find(|entry| entry.local_name.name() == name && entry.import_name.is_namespace_object())
-        .map(|entry| entry.module_request.name().to_string())
+        .map(|entry| entry.module_request.name.clone())
 }
 
 fn check_deep_namespace_for_node(
     node: &AstNode,
-    source: &str,
+    source: &impl std::fmt::Debug,
     namespaces: &[String],
     module: &Arc<ModuleRecord>,
     ctx: &LintContext<'_>,
 ) -> Option<()> {
     let (span, name) = match node.kind() {
-        AstKind::StaticMemberExpression(mem_expr) => mem_expr.static_property_info(),
+        AstKind::StaticMemberExpression(mem_expr) => {
+            let (span, name) = mem_expr.static_property_info();
+            (span, oxc_str::JSStr::from(name))
+        }
         AstKind::ComputedMemberExpression(computed_expr) => computed_expr.static_property_info()?,
         _ => return None,
     };
 
-    if let Some(module_source) = get_module_request_name(name, module) {
+    if let Some(module_source) =
+        name.as_str().and_then(|name| get_module_request_name(name, module))
+    {
         let parent_node = ctx.nodes().parent_node(node.id());
-        let module_record = module.get_loaded_module(module_source.as_str())?;
+        let module_record = module.get_loaded_module(&module_source)?;
         let mut namespaces = namespaces.to_owned();
-        namespaces.push(name.into());
+        namespaces.push(oxc_ast::StaticName::Borrowed(name).to_string());
         check_deep_namespace_for_node(parent_node, source, &namespaces, &module_record, ctx);
     } else {
         check_binding_exported(
             name,
             || {
                 if namespaces.len() > 1 {
-                    no_export_in_deeply_imported_namespace(span, name, &namespaces.join("."))
+                    no_export_in_deeply_imported_namespace(span, name, namespaces.join("."))
                 } else {
                     no_export(span, name, source)
                 }
@@ -306,20 +317,21 @@ fn check_deep_namespace_for_node(
 
 fn check_deep_namespace_for_object_pattern(
     pattern: &ObjectPattern,
-    source: &str,
+    source: &impl std::fmt::Debug,
     namespaces: &[String],
     module: &Arc<ModuleRecord>,
     ctx: &LintContext<'_>,
 ) {
     for property in &pattern.properties {
-        let Some(name) = property.key.name().and_then(oxc_ast::StaticName::into_utf8) else {
+        let Some(name) = property.key.name() else {
             continue;
         };
 
         if let BindingPattern::ObjectPattern(pattern) = &property.value
-            && let Some(module_source) = get_module_request_name(&name, module)
+            && let Some(module_source) =
+                name.as_str().and_then(|name| get_module_request_name(name, module))
         {
-            let Some(next_module) = module.get_loaded_module(module_source.as_str()) else {
+            let Some(next_module) = module.get_loaded_module(&module_source) else {
                 continue;
             };
 
@@ -337,13 +349,13 @@ fn check_deep_namespace_for_object_pattern(
         }
 
         check_binding_exported(
-            &name,
+            name.as_js_str(),
             || {
                 if namespaces.len() > 1 {
                     no_export_in_deeply_imported_namespace(
                         property.key.span(),
                         &name,
-                        &namespaces.join("."),
+                        namespaces.join("."),
                     )
                 } else {
                     no_export(property.key.span(), &name, source)
@@ -356,17 +368,17 @@ fn check_deep_namespace_for_object_pattern(
 }
 
 fn check_binding_exported(
-    name: &str,
+    name: oxc_str::JSStr<'_>,
     get_diagnostic: impl FnOnce() -> OxcDiagnostic,
     module: &ModuleRecord,
     ctx: &LintContext<'_>,
 ) {
-    if module.exported_bindings.contains_key(name)
+    if name.as_str().is_some_and(|name| module.exported_bindings.contains_key(name))
         || (name == "default" && module.export_default.is_some())
         || module
             .exported_bindings_from_star_export()
             .iter()
-            .any(|(_, value)| value.iter().any(|s| s.as_str() == name))
+            .any(|(_, value)| value.iter().any(|s| name == s.as_str()))
     {
         return;
     }

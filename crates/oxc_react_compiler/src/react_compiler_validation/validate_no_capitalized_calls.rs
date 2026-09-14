@@ -2,7 +2,7 @@ use cow_utils::CowUtils;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use oxc_diagnostics::OxcDiagnostic;
-use oxc_str::Ident;
+use oxc_str::{Ident, JSStr};
 
 use crate::diagnostics;
 use crate::react_compiler_hir::environment::Environment;
@@ -25,7 +25,7 @@ pub fn validate_no_capitalized_calls(
     }
 
     let mut capital_load_globals: FxHashMap<IdentifierId, Ident> = FxHashMap::default();
-    let mut capitalized_properties: FxHashMap<IdentifierId, (Ident, Option<Span>)> =
+    let mut capitalized_properties: FxHashMap<IdentifierId, (JSStr, Option<Span>)> =
         FxHashMap::default();
 
     for (_block_id, block) in &func.body.blocks {
@@ -58,7 +58,12 @@ pub fn validate_no_capitalized_calls(
                     property_span,
                     ..
                 } => {
-                    if prop_name.starts_with(|c: char| c.is_ascii_uppercase()) {
+                    if prop_name
+                        .chars()
+                        .next()
+                        .and_then(|ch| ch.to_char())
+                        .is_some_and(|ch| ch.is_ascii_uppercase())
+                    {
                         capitalized_properties.insert(lvalue_id, (*prop_name, *property_span));
                     }
                 }
@@ -68,7 +73,7 @@ pub fn validate_no_capitalized_calls(
                         capitalized_properties.get(&property_id)
                     {
                         env.record_error(diagnostics::capitalized_call(
-                            prop_name,
+                            oxc_ast::StaticName::Borrowed(*prop_name),
                             property_span.or(property.span),
                         ))?;
                     }

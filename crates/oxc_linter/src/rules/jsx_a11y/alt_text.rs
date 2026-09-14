@@ -202,7 +202,8 @@ impl Rule for AltText {
             return;
         };
 
-        let name = &get_element_type(ctx, jsx_el);
+        let Some(name) = get_element_type(ctx, jsx_el).into_utf8() else { return };
+        let name = &name;
 
         // <img>
         if let Some(custom_tags) = &self.img

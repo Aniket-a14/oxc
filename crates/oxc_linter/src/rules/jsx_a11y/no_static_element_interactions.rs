@@ -114,7 +114,7 @@ impl Rule for NoStaticElementInteractions {
             return;
         }
 
-        let element_type = get_element_type(ctx, jsx_el);
+        let Some(element_type) = get_element_type(ctx, jsx_el).into_utf8() else { return };
 
         // Do not test custom JSX elements.
         if !HTML_TAG.contains(element_type.as_ref()) {
@@ -151,14 +151,11 @@ impl Rule for NoStaticElementInteractions {
 
         match role_value {
             JSXAttributeValue::StringLiteral(role) => {
-                let role_str = role.value.as_str().cow_to_lowercase();
-                let roles: Vec<&str> = role_str.split_whitespace().collect();
-
-                if let Some(first_role) = roles.first() {
-                    if is_interactive_role(first_role) {
-                        return;
-                    }
-                    if is_non_interactive_role(first_role) {
+                if let Some(first_role) =
+                    role.value.split_whitespace().next().and_then(oxc_str::JSStr::as_str)
+                {
+                    let first_role = first_role.cow_to_lowercase();
+                    if is_interactive_role(&first_role) || is_non_interactive_role(&first_role) {
                         return;
                     }
                 }

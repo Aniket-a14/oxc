@@ -60,7 +60,7 @@ use oxc_span::SPAN;
 use oxc_str::static_ident;
 use oxc_syntax::operator::AssignmentOperator;
 use oxc_traverse::{Ancestor, BoundIdentifier, Traverse, ast_operations::get_var_name_from_node};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     Helper,
@@ -346,6 +346,15 @@ impl<'a> LegacyDecorator<'a> {
         };
 
         let class_scope_id = class.scope_id();
+        let mut private_names: FxHashSet<Str<'a>> = class
+            .body
+            .body
+            .iter()
+            .filter_map(|element| match element.property_key()? {
+                PropertyKey::PrivateIdentifier(ident) => Some(Str::from(ident.name.as_str())),
+                _ => None,
+            })
+            .collect();
         let mut new_body = ArenaVec::with_capacity_in(class.body.body.len() * 3, ctx);
 
         for element in class.body.body.drain(..) {
@@ -375,7 +384,7 @@ impl<'a> LegacyDecorator<'a> {
             //   `get [_expr = expr]() { ... } set [expr](value) { ... }`
             // Note: Legacy decorators do not support private identifiers,
             // so we only handle static identifiers and computed keys.
-            let (storage_name, getter_key, setter_key) = if accessor.computed {
+            let (mut storage_name, getter_key, setter_key) = if accessor.computed {
                 let key_expr = accessor.key.into_expression();
                 let (assignment, reference) = duplicate_expression(key_expr, true, ctx);
 
@@ -393,17 +402,31 @@ impl<'a> LegacyDecorator<'a> {
             } else {
                 // Use `name()` to get the raw property name, avoiding `get_var_name_from_node`
                 // which strips leading underscores (e.g. `prop` and `_prop` both become "prop").
-                let key_name = accessor
-                    .key
-                    .name()
-                    .and_then(oxc_ast::StaticName::into_utf8)
-                    .unwrap_or_else(|| Cow::Owned(get_var_name_from_node(&accessor.key)));
+                let static_name = accessor.key.name();
+                let key_name = static_name
+                    .as_ref()
+                    .and_then(|name| name.as_str())
+                    .filter(|name| oxc_syntax::identifier::is_identifier_name(name))
+                    .map_or_else(
+                        || Cow::Owned(get_var_name_from_node(&accessor.key)),
+                        Cow::Borrowed,
+                    );
                 let storage_name =
                     Str::from_strs_array_in(["_", &key_name, "_accessor_storage"], ctx);
                 let getter_key = accessor.key.clone_in(ctx.ast.allocator());
                 let setter_key = accessor.key.clone_in(ctx.ast.allocator());
                 (storage_name, getter_key, setter_key)
             };
+
+            // Sanitized property names can coincide, including distinct lone-surrogate keys.
+            // Avoid both existing private names and storage names generated earlier in the class.
+            let base_name = storage_name;
+            let mut suffix = 2;
+            while !private_names.insert(storage_name) {
+                storage_name =
+                    Str::from_strs_array_in([base_name.as_str(), &suffix.to_string()], ctx);
+                suffix += 1;
+            }
 
             // For static accessors, use class name reference; for instance accessors, use `this`.
             let object_binding = if is_static { static_class_binding.as_ref() } else { None };

@@ -22,6 +22,7 @@ use oxc_ast::ast::{
 use oxc_ast_visit::VisitJs;
 use oxc_parser::Parser;
 use oxc_span::{GetSpan, SourceType, Span};
+use oxc_str::JSStr;
 use oxc_tasks_common::project_root;
 
 mod json;
@@ -236,6 +237,16 @@ fn format_raw_string_literal(code: &str) -> String {
     format!("r{hashes}\"{code}\"{hashes}")
 }
 // TODO: handle `noFormat`(in typescript-eslint)
+// Generated Rust fixtures feed the parser UTF-8 source text. An actual lone
+// surrogate in that source cannot be represented by the fixture format.
+fn utf8_test_source(value: JSStr<'_>) -> Option<&str> {
+    let source = value.as_str();
+    if source.is_none() {
+        eprintln!("Skipping test source containing a lone surrogate: {value:?}");
+    }
+    source
+}
+
 fn format_tagged_template_expression(tag_expr: &TaggedTemplateExpression) -> Option<String> {
     // Some test cases use code like this (e.g. no-invalid-regex):
     // ```js
@@ -246,7 +257,7 @@ fn format_tagged_template_expression(tag_expr: &TaggedTemplateExpression) -> Opt
     } else if tag_expr.tag.is_specific_id("dedent") || tag_expr.tag.is_specific_id("outdent") {
         tag_expr.quasi.quasis.first().map(|quasi| util::dedent(&quasi.value.raw))
     } else {
-        tag_expr.quasi.single_quasi().map(|quasi| quasi.to_string())
+        tag_expr.quasi.single_quasi().and_then(utf8_test_source).map(str::to_owned)
     }
 }
 
@@ -274,7 +285,11 @@ impl<'a> VisitJs<'a> for TestCase {
                 let ArrayExpressionElement::StringLiteral(lit) = arg else {
                     continue;
                 };
-                code.push_str(lit.value.as_str());
+                let Some(source) = utf8_test_source(lit.value) else {
+                    self.code = None;
+                    return;
+                };
+                code.push_str(source);
                 code.push('\n');
             }
             self.code = Some(code);
@@ -288,13 +303,16 @@ impl<'a> VisitJs<'a> for TestCase {
                 ObjectPropertyKind::ObjectProperty(prop) => match &prop.key {
                     PropertyKey::StaticIdentifier(ident) if ident.name == "code" => {
                         self.code = match &prop.value {
-                            Expression::StringLiteral(s) => Some(s.value.to_string()),
+                            Expression::StringLiteral(s) => {
+                                utf8_test_source(s.value).map(str::to_owned)
+                            }
                             Expression::TaggedTemplateExpression(tag_expr) => {
                                 format_tagged_template_expression(tag_expr)
                             }
-                            Expression::TemplateLiteral(tag_expr) => {
-                                tag_expr.single_quasi().map(|quasi| quasi.to_string())
-                            }
+                            Expression::TemplateLiteral(tag_expr) => tag_expr
+                                .single_quasi()
+                                .and_then(utf8_test_source)
+                                .map(str::to_owned),
                             // handle code like ["{", "a: 1", "}"].join("\n")
                             Expression::CallExpression(call_expr) => {
                                 if !call_expr.arguments.first().is_some_and(|arg|  matches!(arg, Argument::StringLiteral(string) if string.value == "\n")) {
@@ -310,32 +328,33 @@ impl<'a> VisitJs<'a> for TestCase {
                                 let Expression::ArrayExpression(array_expr) = &member.object else {
                                     continue;
                                 };
-                                Some(
-                                    array_expr
-                                        .elements
-                                        .iter()
-                                        .map(|arg| match arg {
-                                            ArrayExpressionElement::StringLiteral(string) => {
-                                                string.value.as_str()
-                                            }
-                                            _ => "",
-                                        })
-                                        .collect::<Vec<_>>()
-                                        .join("\n"),
-                                )
+                                array_expr
+                                    .elements
+                                    .iter()
+                                    .map(|arg| match arg {
+                                        ArrayExpressionElement::StringLiteral(string) => {
+                                            utf8_test_source(string.value)
+                                        }
+                                        _ => Some(""),
+                                    })
+                                    .collect::<Option<Vec<_>>>()
+                                    .map(|lines| lines.join("\n"))
                             }
                             _ => continue,
                         }
                     }
                     PropertyKey::StaticIdentifier(ident) if ident.name == "output" => {
                         self.output = match &prop.value {
-                            Expression::StringLiteral(s) => Some(s.value.to_string()),
+                            Expression::StringLiteral(s) => {
+                                utf8_test_source(s.value).map(str::to_owned)
+                            }
                             Expression::TaggedTemplateExpression(tag_expr) => {
                                 format_tagged_template_expression(tag_expr)
                             }
-                            Expression::TemplateLiteral(tag_expr) => {
-                                tag_expr.single_quasi().map(|quasi| quasi.to_string())
-                            }
+                            Expression::TemplateLiteral(tag_expr) => tag_expr
+                                .single_quasi()
+                                .and_then(utf8_test_source)
+                                .map(str::to_owned),
                             _ => None,
                         }
                     }
@@ -371,16 +390,12 @@ impl<'a> VisitJs<'a> for TestCase {
     }
 
     fn visit_template_literal(&mut self, lit: &TemplateLiteral<'a>) {
-        self.code = Some(
-            lit.single_quasi()
-                .expect("Expected template literal to have a single quasi")
-                .to_string(),
-        );
+        self.code = lit.single_quasi().and_then(utf8_test_source).map(str::to_owned);
         self.config = None;
     }
 
     fn visit_string_literal(&mut self, lit: &StringLiteral) {
-        self.code = Some(lit.value.to_string());
+        self.code = utf8_test_source(lit.value).map(str::to_owned);
         self.config = None;
     }
 
@@ -557,7 +572,9 @@ impl<'a> VisitJs<'a> for State<'a> {
                 && let Some(Argument::StringLiteral(lit)) = expr.arguments.first()
             {
                 pushed = true;
-                self.group_comment_stack.push(lit.value.to_string());
+                self.group_comment_stack.push(
+                    lit.value.as_str().map_or_else(|| format!("{:?}", lit.value), str::to_owned),
+                );
             }
         }
         for arg in &expr.arguments {
@@ -983,14 +1000,14 @@ impl<'a> RuleConfig<'a> {
 
     // Helper function to parse type string literals
     fn parse_type_string_literal(&mut self, lit: &StringLiteral) -> Option<RuleConfigElement> {
-        match lit.value.as_str() {
+        match lit.value.as_str()? {
             "string" => Some(RuleConfigElement::String),
             "boolean" => Some(RuleConfigElement::Boolean),
             "number" => Some(RuleConfigElement::Number),
             "integer" => Some(RuleConfigElement::Integer),
             "array" | "object" => None,
             _ => {
-                self.log_error(&format!("Unhandled `type` value: {}", lit.value));
+                self.log_error(&format!("Unhandled `type` value: {:?}", lit.value));
                 None
             }
         }
@@ -1097,7 +1114,17 @@ impl<'a> RuleConfig<'a> {
             .iter()
             .filter_map(|arg| match arg {
                 ArrayExpressionElement::StringLiteral(string_literal) => {
-                    Some(RuleConfigElement::StringLiteral(string_literal.value.into()))
+                    // Rust configuration enums store UTF-8 strings. Report unsupported
+                    // schema values instead of silently dropping the enum alternative.
+                    if let Some(value) = string_literal.value.as_str() {
+                        Some(RuleConfigElement::StringLiteral(value.into()))
+                    } else {
+                        self.log_error(&format!(
+                            "Cannot represent config enum value as UTF-8: {:?}",
+                            string_literal.value
+                        ));
+                        None
+                    }
                 }
                 ArrayExpressionElement::BooleanLiteral(boolean_literal) => {
                     if boolean_literal.value {

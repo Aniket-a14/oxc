@@ -113,7 +113,9 @@ fn prop_key_name<'a>(key: &PropertyKey<'a>, ctx: &LintContext<'a>) -> &'a str {
         PropertyKey::Identifier(ident) => ident.name.as_str(),
         PropertyKey::StaticIdentifier(ident) => ident.name.as_str(),
         PropertyKey::PrivateIdentifier(ident) => ident.name.as_str(),
-        PropertyKey::StringLiteral(lit) => lit.value.as_str(),
+        PropertyKey::StringLiteral(lit) => {
+            lit.value.as_str().unwrap_or_else(|| ctx.source_range(lit.span))
+        }
         PropertyKey::NumericLiteral(lit) => lit.raw.as_ref().unwrap().as_str(),
         _ => ctx.source_range(key.span()),
     }
@@ -182,4 +184,25 @@ fn test() {
     ];
 
     Tester::new(NoDupeKeys::NAME, NoDupeKeys::PLUGIN, pass, fail).test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr() {
+    use crate::tester::Tester;
+    let pass = vec![
+        r#"const o = {"\uD800": 1, "\uD801": 2, "\uDC00": 3, "\\uD800": 4};"#,
+        r#"const o = {get "\uD800"() {}, set "\ud800"(v) {}};"#,
+    ];
+    let fail = vec![
+        r#"const o = {"normal": 1, normal: 2};"#,
+        r#"const o = {"\uD800": 1, "\ud800": 2};"#,
+        r#"const o = {"\uDC00": 1, "\udc00": 2};"#,
+        r#"const o = {"\uD800\uDC00": 1, "𐀀": 2};"#,
+        r#"const o = {"before\uD800after": 1, "before\ud800after": 2};"#,
+        r#"const o = {[`\uD800`]: 1, "\ud800": 2};"#,
+    ];
+    Tester::new(NoDupeKeys::NAME, NoDupeKeys::PLUGIN, pass, fail)
+        .with_snapshot_suffix("jsstr")
+        .intentionally_allow_no_fix_tests()
+        .test_and_snapshot();
 }

@@ -1,0 +1,21 @@
+---
+source: crates/oxc_isolated_declarations/tests/mod.rs
+input_file: crates/oxc_isolated_declarations/tests/fixtures/jsstr-accessors.ts
+---
+```
+==================== .D.TS ====================
+
+export declare class Accessors {
+	get normal(): number;
+	set normal(value: number);
+	get "\ud800"(): string;
+	set "\ud800"(value: string);
+	set "\udc00"(value: boolean);
+	get "\udc00"(): boolean;
+	get "\ud801"(): number;
+	set "\ud801"(value: number);
+	get "𐀀"(): bigint;
+	set "𐀀"(value: bigint);
+	get "before\ud802after"(): string;
+	set "before\ud802after"(value: string);
+}

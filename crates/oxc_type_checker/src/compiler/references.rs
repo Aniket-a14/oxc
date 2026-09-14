@@ -17,6 +17,7 @@ use oxc_ast::ast::{
 use oxc_ast_visit::{Visit, walk};
 use oxc_span::GetSpan;
 use oxc_str::CompactStr;
+use oxc_str::JSStr;
 use oxc_syntax::module_record::ModuleRecord;
 
 use crate::tspath::is_external_module_name_relative;
@@ -25,7 +26,7 @@ use crate::tspath::is_external_module_name_relative;
 /// `ReferencedFiles` + `TypeReferenceDirectives`).
 #[derive(Debug, Default)]
 pub(super) struct ExternalModuleReferences {
-    /// Module specifiers referenced by imports: static imports/re-exports in source order,
+    /// UTF-8 module specifiers accepted by the filesystem resolver, referenced by imports: static imports/re-exports in source order,
     /// followed by dynamic `import()`s and `import("...")` type queries in source order.
     pub imports: Vec<CompactStr>,
     /// String-literal `declare module "..."` names that augment an existing external module.
@@ -55,7 +56,8 @@ pub(super) fn collect_external_module_references(
     // each request comes from the module record, so ordering below can interleave them with the
     // statements the walk finds).
     for (specifier, requests) in &module_record.requested_modules {
-        let specifier = specifier.as_str();
+        // Resolver boundary only; the parser's lossless syntax record remains intact.
+        let Some(specifier) = specifier.as_str() else { continue };
         if specifier.is_empty() {
             continue;
         }
@@ -168,19 +170,19 @@ impl Collector {
                     &decl.module_reference
                 {
                     let name = &reference.expression;
-                    self.add_static(name.span.start, &name.value, in_ambient_module);
+                    self.add_static(name.span.start, name.value, in_ambient_module);
                 }
             }
             // Top-level imports/re-exports are already in the module record; only the ones
             // nested inside ambient module bodies need collecting here.
             Statement::ImportDeclaration(decl) => {
                 if in_ambient_module {
-                    self.add_static(decl.source.span.start, &decl.source.value, true);
+                    self.add_static(decl.source.span.start, decl.source.value, true);
                 }
             }
             Statement::ExportFromDeclaration(decl) => {
                 if in_ambient_module {
-                    self.add_static(decl.source.span.start, &decl.source.value, true);
+                    self.add_static(decl.source.span.start, decl.source.value, true);
                 }
             }
             Statement::ExportDeclaration(decl) => {
@@ -190,12 +192,12 @@ impl Collector {
                         &decl.module_reference
                 {
                     let name = &reference.expression;
-                    self.add_static(name.span.start, &name.value, in_ambient_module);
+                    self.add_static(name.span.start, name.value, in_ambient_module);
                 }
             }
             Statement::ExportAllDeclaration(decl) => {
                 if in_ambient_module {
-                    self.add_static(decl.source.span.start, &decl.source.value, true);
+                    self.add_static(decl.source.span.start, decl.source.value, true);
                 }
             }
             Statement::TSExternalModuleDeclaration(decl) => {
@@ -206,10 +208,15 @@ impl Collector {
                 // Ambient module declarations can be interpreted as augmentations of existing
                 // external modules: in an external module file, any of them; in a script file,
                 // the non-relative ones immediately nested in a top-level ambient module.
-                if self.is_external_module
-                    || (in_ambient_module && !is_external_module_name_relative(&name.value))
-                {
-                    self.module_augmentations.push(CompactStr::from(name.value.as_str()));
+                let value = name.value;
+                let relative = value == "."
+                    || value == ".."
+                    || ["./", "../", ".\\", "..\\"].iter().any(|prefix| value.starts_with(prefix));
+                if self.is_external_module || (in_ambient_module && !relative) {
+                    // Augmentations go to the filesystem resolver, which accepts UTF-8.
+                    if let Some(value) = value.as_str() {
+                        self.module_augmentations.push(CompactStr::from(value));
+                    }
                 } else if !in_ambient_module {
                     // A top-level ambient module declaration in a script file *declares* the
                     // module — nothing to resolve, but its body may reference other modules.
@@ -226,7 +233,9 @@ impl Collector {
 
     /// Record a statically referenced module name. Inside an ambient module, relative names
     /// cannot reference other external modules (TypeScript 1.0 spec §12.1.6).
-    fn add_static(&mut self, start: u32, name: &str, in_ambient_module: bool) {
+    fn add_static(&mut self, start: u32, name: JSStr<'_>, in_ambient_module: bool) {
+        // The filesystem resolver accepts only UTF-8 paths.
+        let Some(name) = name.as_str() else { return };
         if !name.is_empty() && (!in_ambient_module || !is_external_module_name_relative(name)) {
             self.statics.push((start, CompactStr::from(name)));
         }
@@ -246,18 +255,17 @@ impl CallCollector<'_> {
     /// string literal or a no-substitution template), using the parsed (cooked) value so escape
     /// sequences resolve the same file TypeScript would.
     fn add_string_literal_like(&mut self, expression: &Expression<'_>) {
+        // This list is solely for the UTF-8 filesystem resolver, not syntax analysis.
         match expression {
             Expression::StringLiteral(literal) => {
-                if !literal.value.is_empty() {
-                    self.dynamics
-                        .push((literal.span.start, CompactStr::from(literal.value.as_str())));
+                if let Some(value) = literal.value.as_str()
+                    && !value.is_empty()
+                {
+                    self.dynamics.push((literal.span.start, CompactStr::from(value)));
                 }
             }
             Expression::TemplateLiteral(template) if template.is_no_substitution_template() => {
-                let value = template.quasis[0].value.cooked.as_ref().map_or_else(
-                    || template.quasis[0].value.raw.as_str(),
-                    |cooked| cooked.as_str(),
-                );
+                let Some(value) = template.single_quasi().and_then(JSStr::as_str) else { return };
                 if !value.is_empty() {
                     self.dynamics.push((template.span.start, CompactStr::from(value)));
                 }
@@ -274,8 +282,10 @@ impl<'a> Visit<'a> for CallCollector<'_> {
     }
 
     fn visit_ts_import_type(&mut self, it: &TSImportType<'a>) {
-        if !it.source.value.is_empty() {
-            self.dynamics.push((it.source.span.start, CompactStr::from(it.source.value.as_str())));
+        if let Some(value) = it.source.value.as_str()
+            && !value.is_empty()
+        {
+            self.dynamics.push((it.source.span.start, CompactStr::from(value)));
         }
         // Type arguments may nest further import types.
         walk::walk_ts_import_type(self, it);

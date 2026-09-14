@@ -86,7 +86,7 @@ impl Rule for HeadingHasContent {
             return;
         };
 
-        let name = get_element_type(ctx, jsx_el);
+        let Some(name) = get_element_type(ctx, jsx_el).into_utf8() else { return };
         let name = name.as_ref();
 
         if DEFAULT_COMPONENTS.binary_search(&name).is_err()

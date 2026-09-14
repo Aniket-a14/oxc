@@ -82,20 +82,20 @@ source: crates/oxc_linter/src/tester.rs
   help: Remove the file extension from this import.
 
   ⚠ import(extensions): Missing file extension in import declaration.
-   ╭─[extensions.tsx:2:17]
- 1 │ 
- 2 │                 import barjs from ".";
-   ·                 ──────────────────────
- 3 │                 import barjs2 from "..";
-   ╰────
-  help: Add a file extension to this import.
-
-  ⚠ import(extensions): Missing file extension in import declaration.
    ╭─[extensions.tsx:3:17]
  2 │                 import barjs from ".";
  3 │                 import barjs2 from "..";
    ·                 ────────────────────────
  4 │             
+   ╰────
+  help: Add a file extension to this import.
+
+  ⚠ import(extensions): Missing file extension in import declaration.
+   ╭─[extensions.tsx:2:17]
+ 1 │ 
+ 2 │                 import barjs from ".";
+   ·                 ──────────────────────
+ 3 │                 import barjs2 from "..";
    ╰────
   help: Add a file extension to this import.
 
@@ -136,15 +136,6 @@ source: crates/oxc_linter/src/tester.rs
   help: Remove the file extension from this import.
 
   ⚠ import(extensions): Missing file extension in import declaration.
-   ╭─[extensions.tsx:4:17]
- 3 │                 import bar from './bar.json';
- 4 │                 import Component from './Component';
-   ·                 ────────────────────────────────────
- 5 │                 import baz from 'foo/baz';
-   ╰────
-  help: Add a file extension to this import.
-
-  ⚠ import(extensions): Missing file extension in import declaration.
    ╭─[extensions.tsx:7:17]
  6 │                 import baw from '@scoped/baw/import';
  7 │                 import chart from '@/configs/chart';
@@ -171,14 +162,14 @@ source: crates/oxc_linter/src/tester.rs
    ╰────
   help: Add a file extension to this import.
 
-  ⚠ import(extensions): File extension "jsx" should not be included in the import declaration.
+  ⚠ import(extensions): Missing file extension in import declaration.
    ╭─[extensions.tsx:4:17]
  3 │                 import bar from './bar.json';
- 4 │                 import Component from './Component.jsx';
-   ·                 ────────────────────────────────────────
- 5 │                 import express from 'express';
+ 4 │                 import Component from './Component';
+   ·                 ────────────────────────────────────
+ 5 │                 import baz from 'foo/baz';
    ╰────
-  help: Remove the file extension from this import.
+  help: Add a file extension to this import.
 
   ⚠ import(extensions): File extension "js" should not be included in the import declaration.
    ╭─[extensions.tsx:2:17]
@@ -186,6 +177,15 @@ source: crates/oxc_linter/src/tester.rs
  2 │                 import foo from './foo.js';
    ·                 ───────────────────────────
  3 │                 import bar from './bar.json';
+   ╰────
+  help: Remove the file extension from this import.
+
+  ⚠ import(extensions): File extension "jsx" should not be included in the import declaration.
+   ╭─[extensions.tsx:4:17]
+ 3 │                 import bar from './bar.json';
+ 4 │                 import Component from './Component.jsx';
+   ·                 ────────────────────────────────────────
+ 5 │                 import express from 'express';
    ╰────
   help: Remove the file extension from this import.
 
@@ -258,20 +258,20 @@ source: crates/oxc_linter/src/tester.rs
   help: Remove the file extension from this import.
 
   ⚠ import(extensions): Missing file extension in import declaration.
-   ╭─[extensions.tsx:2:17]
- 1 │ 
- 2 │                 import foo from "@/ImNotAScopedModule";
-   ·                 ───────────────────────────────────────
- 3 │                 import chart from "@/configs/chart";
-   ╰────
-  help: Add a file extension to this import.
-
-  ⚠ import(extensions): Missing file extension in import declaration.
    ╭─[extensions.tsx:3:17]
  2 │                 import foo from "@/ImNotAScopedModule";
  3 │                 import chart from "@/configs/chart";
    ·                 ────────────────────────────────────
  4 │             
+   ╰────
+  help: Add a file extension to this import.
+
+  ⚠ import(extensions): Missing file extension in import declaration.
+   ╭─[extensions.tsx:2:17]
+ 1 │ 
+ 2 │                 import foo from "@/ImNotAScopedModule";
+   ·                 ───────────────────────────────────────
+ 3 │                 import chart from "@/configs/chart";
    ╰────
   help: Add a file extension to this import.
 
@@ -473,21 +473,21 @@ source: crates/oxc_linter/src/tester.rs
    ╰────
   help: Add a file extension to this import.
 
-  ⚠ import(extensions): File extension "vue" should not be included in the import declaration.
-   ╭─[extensions.tsx:2:17]
- 1 │ 
- 2 │                 import Component from './App.vue';
-   ·                 ──────────────────────────────────
- 3 │                 import utils from './utils.ts';
-   ╰────
-  help: Remove the file extension from this import.
-
   ⚠ import(extensions): File extension "ts" should not be included in the import declaration.
    ╭─[extensions.tsx:3:17]
  2 │                 import Component from './App.vue';
  3 │                 import utils from './utils.ts';
    ·                 ───────────────────────────────
  4 │             
+   ╰────
+  help: Remove the file extension from this import.
+
+  ⚠ import(extensions): File extension "vue" should not be included in the import declaration.
+   ╭─[extensions.tsx:2:17]
+ 1 │ 
+ 2 │                 import Component from './App.vue';
+   ·                 ──────────────────────────────────
+ 3 │                 import utils from './utils.ts';
    ╰────
   help: Remove the file extension from this import.
 
@@ -549,20 +549,20 @@ source: crates/oxc_linter/src/tester.rs
   help: Add a file extension to this import.
 
   ⚠ import(extensions): Missing file extension in import declaration.
-   ╭─[extensions.tsx:3:17]
- 2 │                 import { a } from './standard';
- 3 │                 import { b } from 'custom+protocol:module';
-   ·                 ───────────────────────────────────────────
- 4 │             
-   ╰────
-  help: Add a file extension to this import.
-
-  ⚠ import(extensions): Missing file extension in import declaration.
    ╭─[extensions.tsx:2:17]
  1 │ 
  2 │                 import { a } from './standard';
    ·                 ───────────────────────────────
  3 │                 import { b } from 'custom+protocol:module';
+   ╰────
+  help: Add a file extension to this import.
+
+  ⚠ import(extensions): Missing file extension in import declaration.
+   ╭─[extensions.tsx:3:17]
+ 2 │                 import { a } from './standard';
+ 3 │                 import { b } from 'custom+protocol:module';
+   ·                 ───────────────────────────────────────────
+ 4 │             
    ╰────
   help: Add a file extension to this import.
 

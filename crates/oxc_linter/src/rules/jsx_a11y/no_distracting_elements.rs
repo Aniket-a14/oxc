@@ -112,7 +112,7 @@ impl Rule for NoDistractingElements {
             return;
         };
 
-        let element_type = get_element_type(ctx, jsx_el);
+        let Some(element_type) = get_element_type(ctx, jsx_el).into_utf8() else { return };
 
         match element_type.as_ref() {
             "marquee" if self.check_marquee => {

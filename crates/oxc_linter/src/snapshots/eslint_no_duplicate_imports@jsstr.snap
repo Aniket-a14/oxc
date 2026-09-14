@@ -1,0 +1,39 @@
+---
+source: crates/oxc_linter/src/tester.rs
+---
+
+  ⚠ eslint(no-duplicate-imports): 'x' import is duplicated
+   ╭─[no_duplicate_imports.tsx:1:8]
+ 1 │ import "x"; import "x";
+   ·        ─┬─         ─┬─
+   ·         │           ╰── This import is duplicated
+   ·         ╰── Can be merged with this import
+   ╰────
+  help: Merge the duplicated import into a single import statement
+
+  ⚠ eslint(no-duplicate-imports): 'x\uD800' import is duplicated
+   ╭─[no_duplicate_imports.tsx:1:8]
+ 1 │ import "x\uD800"; import "x\ud800";
+   ·        ────┬────         ────┬────
+   ·            │                 ╰── This import is duplicated
+   ·            ╰── Can be merged with this import
+   ╰────
+  help: Merge the duplicated import into a single import statement
+
+  ⚠ eslint(no-duplicate-imports): 'x\uDC00' import is duplicated
+   ╭─[no_duplicate_imports.tsx:1:8]
+ 1 │ import "x\uDC00"; import "x\udc00";
+   ·        ────┬────         ────┬────
+   ·            │                 ╰── This import is duplicated
+   ·            ╰── Can be merged with this import
+   ╰────
+  help: Merge the duplicated import into a single import statement
+
+  ⚠ eslint(no-duplicate-imports): 'x𐀀' import is duplicated
+   ╭─[no_duplicate_imports.tsx:1:8]
+ 1 │ import "x\uD800\uDC00"; import "x𐀀";
+   ·        ───────┬───────         ──┬─
+   ·               │                  ╰── This import is duplicated
+   ·               ╰── Can be merged with this import
+   ╰────
+  help: Merge the duplicated import into a single import statement

@@ -5,8 +5,8 @@ use oxc_span::{GetSpan, Span};
 use crate::{
     context::LintContext,
     utils::{
-        JestFnKind, JestGeneralFnKind, KnownMemberExpressionProperty, ParsedGeneralJestFnCall,
-        PossibleJestNode, parse_general_jest_fn_call,
+        JestFnKind, JestGeneralFnKind, ParsedGeneralJestFnCall, PossibleJestNode,
+        parse_general_jest_fn_call,
     },
 };
 
@@ -94,7 +94,7 @@ fn parse_no_test_prefixes_call<'a>(
     if let Some(jest_fn_call) = parse_general_jest_fn_call(call_expr, possible_jest_node, ctx) {
         return Some(ParsedNoTestPrefixesCall {
             name: jest_fn_call.name.to_string(),
-            member_names: get_member_names(&jest_fn_call),
+            member_names: get_member_names(&jest_fn_call)?,
         });
     }
 
@@ -118,12 +118,11 @@ fn parse_no_test_prefixes_call<'a>(
     Some(ParsedNoTestPrefixesCall { name, member_names })
 }
 
-fn get_member_names(jest_fn_call: &ParsedGeneralJestFnCall) -> Vec<String> {
+fn get_member_names(jest_fn_call: &ParsedGeneralJestFnCall) -> Option<Vec<String>> {
     jest_fn_call
         .members
         .iter()
-        .filter_map(KnownMemberExpressionProperty::name)
-        .map(|name| name.to_string())
+        .map(|member| member.name().and_then(oxc_str::JSStr::as_str).map(str::to_owned))
         .collect()
 }
 

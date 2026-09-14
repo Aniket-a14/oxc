@@ -88,3 +88,43 @@ where
     let pattern = String::deserialize(deserializer)?;
     RegexBuilder::new(&pattern).build().map(Some).map_err(D::Error::custom)
 }
+
+/// Rust Unicode regex semantics over WTF-8 bytes: scalar text can match on either
+/// side of a lone surrogate, while Unicode classes exclude surrogate code points.
+pub fn deserialize_bytes_regex_option<'de, D>(
+    deserializer: D,
+) -> Result<Option<lazy_regex::BytesRegex>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    Option::<String>::deserialize(deserializer)?
+        .map(|pattern| lazy_regex::BytesRegex::new(&pattern))
+        .transpose()
+        .map_err(D::Error::custom)
+}
+
+pub fn deserialize_required_bytes_regex_option<'de, D>(
+    deserializer: D,
+) -> Result<Option<lazy_regex::BytesRegex>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    let pattern = String::deserialize(deserializer)?;
+    lazy_regex::BytesRegex::new(&pattern).map(Some).map_err(D::Error::custom)
+}
+
+pub fn deserialize_bytes_regex_vec<'de, D>(
+    deserializer: D,
+) -> Result<Vec<lazy_regex::BytesRegex>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    Vec::<String>::deserialize(deserializer)?
+        .into_iter()
+        .map(|pattern| lazy_regex::BytesRegex::new(&pattern))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(D::Error::custom)
+}

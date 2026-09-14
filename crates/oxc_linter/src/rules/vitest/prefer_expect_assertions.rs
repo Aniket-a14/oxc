@@ -20,7 +20,7 @@ use crate::{
         CallbackBody, DOCUMENTATION, PreferExpectAssertionsConfig, PreferExpectAssertionsRuleImpl,
         resolve_expect_local_name, should_check,
     },
-    utils::{collect_possible_jest_call_node, get_node_name},
+    utils::{collect_possible_jest_call_node, node_name_matches},
 };
 
 fn have_expect_assertions(span: Span, prefix: &str) -> OxcDiagnostic {
@@ -180,8 +180,9 @@ impl<'a> VisitJs<'a> for ExpectPrefixScanner<'_> {
             return;
         }
 
-        let name = get_node_name(&call_expr.callee);
-        if name == self.prefix || name.starts_with(self.prefix_dot.as_str()) {
+        if node_name_matches(&call_expr.callee, self.prefix, false)
+            || node_name_matches(&call_expr.callee, self.prefix_dot.as_str(), true)
+        {
             self.found = true;
             return;
         }

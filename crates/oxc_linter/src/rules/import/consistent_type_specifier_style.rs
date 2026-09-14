@@ -314,14 +314,23 @@ fn gen_type_import_declaration<'c, 'a: 'c>(
 }
 
 fn is_declaration_file_import(import_decl: &ImportDeclaration) -> bool {
-    let source = &import_decl.source.value;
+    let Some(source) = import_decl.source.value.as_str() else {
+        let source = import_decl.source.value;
+        // Declaration suffixes are ASCII even when the file name is not UTF-8.
+        return source.rsplit_once(".d.").is_some_and(|(base, suffix)| {
+            !base.is_empty()
+                && (suffix == "mts" || suffix == "cts" || suffix == "ts" || suffix.ends_with(".ts"))
+                && !suffix.contains("/")
+                && (!cfg!(windows) || !suffix.contains("\\"))
+        });
+    };
     // Relatively fast check to avoid unnecessary Path and extension parsing
     // if it doesn't even look like a declaration file import
     if !source.contains(".d") {
         return false;
     }
     // Slower check that parses the file name to check if it's a declaration file
-    let path = Path::new(source.as_str());
+    let path = Path::new(source);
     let Some(extension) = path.extension().and_then(std::ffi::os_str::OsStr::to_str) else {
         return false;
     };
@@ -566,4 +575,32 @@ fn test() {
     )
     .expect_fix(fix)
     .test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr_consumers() {
+    use crate::{rule::RuleMeta, tester::Tester};
+    let pass = vec![(
+        r#"import type { X } from "./x\uD800.d.ts";"#,
+        Some(serde_json::json!(["prefer-inline"])),
+    )];
+    let fail = vec![
+        (r#"import { type X } from "./x\uD800.d.ts";"#, Some(serde_json::json!(["prefer-inline"]))),
+        (
+            r#"import { type X } from "./x\uDC00.d.mts";"#,
+            Some(serde_json::json!(["prefer-inline"])),
+        ),
+    ];
+    Tester::new(
+        ConsistentTypeSpecifierStyle::NAME,
+        ConsistentTypeSpecifierStyle::PLUGIN,
+        pass,
+        fail,
+    )
+    .expect_fix(vec![(
+        r#"import { type X } from "./x\uD800.d.ts";"#,
+        "import type { X } from './x\\ud800.d.ts';",
+        Some(serde_json::json!(["prefer-inline"])),
+    )])
+    .test();
 }

@@ -105,9 +105,9 @@ fn is_focusable<'a>(ctx: &LintContext<'a>, element: &JSXOpeningElement<'a>) -> b
         return parse_jsx_value(attr_value).is_ok_and(|num| num >= 0.0);
     }
 
-    match tag_name.as_ref() {
-        "a" | "area" => has_jsx_prop_ignore_case(element, "href").is_some(),
-        "button" | "input" | "select" | "textarea" => {
+    match tag_name.as_str() {
+        Some("a" | "area") => has_jsx_prop_ignore_case(element, "href").is_some(),
+        Some("button" | "input" | "select" | "textarea") => {
             has_jsx_prop_ignore_case(element, "disabled").is_none()
         }
         _ => false,

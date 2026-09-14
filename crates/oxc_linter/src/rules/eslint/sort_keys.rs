@@ -1,12 +1,13 @@
-use std::{borrow::Cow, cmp::Ordering, str::Chars};
+use std::{borrow::Cow, cmp::Ordering};
 
 use oxc_ast::{
-    AstKind,
+    AstKind, StaticName,
     ast::{Expression, ObjectExpression, ObjectProperty, ObjectPropertyKind},
 };
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_span::{GetSpan, Span};
+use oxc_str::{JSChar, JSStr};
 use oxc_syntax::line_terminator::LineTerminatorSplitter;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -133,7 +134,7 @@ impl Rule for SortKeys {
 }
 
 struct FixableProperty<'a> {
-    key: Cow<'a, str>,
+    key: StaticName<'a>,
     span: Span,
     text: Cow<'a, str>,
     /// `text` already includes the inter-property `,` (lifted with a same-line `// ...` comment).
@@ -148,7 +149,7 @@ fn is_object_sorted(
     sort_order: &SortOrder,
     options: &SortKeysOptions,
 ) -> bool {
-    let mut prev_key: Option<Cow<'_, str>> = None;
+    let mut prev_key: Option<StaticName<'_>> = None;
 
     for (i, prop) in object.properties.iter().enumerate() {
         match prop {
@@ -156,10 +157,7 @@ fn is_object_sorted(
                 prev_key = None;
             }
             ObjectPropertyKind::ObjectProperty(obj) => {
-                let Some(key) = obj.key.static_name().and_then(oxc_ast::StaticName::into_utf8)
-                else {
-                    continue;
-                };
+                let Some(key) = obj.key.static_name() else { continue };
 
                 if let Some(ref prev) = prev_key {
                     let ordering = compare_keys(prev, &key, options);
@@ -194,13 +192,28 @@ fn is_object_sorted(
 }
 
 /// Compare two keys according to sort options, without allocating.
-fn compare_keys(a: &str, b: &str, options: &SortKeysOptions) -> Ordering {
+fn compare_keys(a: &StaticName<'_>, b: &StaticName<'_>, options: &SortKeysOptions) -> Ordering {
+    let (a, b) = (a.as_js_str(), b.as_js_str());
     if options.natural {
         natural_compare(a, b, options.case_sensitive)
-    } else if options.case_sensitive {
-        a.cmp(b)
+    } else if let (Some(a), Some(b)) = (a.as_str(), b.as_str()) {
+        if options.case_sensitive {
+            a.cmp(b)
+        } else {
+            a.bytes().map(|b| b.to_ascii_lowercase()).cmp(b.bytes().map(|b| b.to_ascii_lowercase()))
+        }
     } else {
-        a.bytes().map(|b| b.to_ascii_lowercase()).cmp(b.bytes().map(|b| b.to_ascii_lowercase()))
+        a.chars()
+            .map(|ch| sort_char(ch, options.case_sensitive))
+            .cmp(b.chars().map(|ch| sort_char(ch, options.case_sensitive)))
+    }
+}
+
+fn sort_char(ch: JSChar, case_sensitive: bool) -> u32 {
+    if !case_sensitive && let Some(ch) = ch.to_char() {
+        u32::from(ch.to_ascii_lowercase())
+    } else {
+        ch.to_u32()
     }
 }
 
@@ -355,7 +368,7 @@ fn collect_fixable_properties<'a>(
                     SpreadPos::End => return None,
                 }
 
-                let key = obj.key.static_name().and_then(oxc_ast::StaticName::into_utf8)?;
+                let key = obj.key.static_name()?;
 
                 props.push(FixableProperty {
                     key,
@@ -443,7 +456,7 @@ fn build_property_text<'a>(
     Cow::Owned(format!("{before_value}{replacement}{after_value}"))
 }
 
-fn natural_compare(a: &str, b: &str, case_sensitive: bool) -> Ordering {
+fn natural_compare(a: JSStr<'_>, b: JSStr<'_>, case_sensitive: bool) -> Ordering {
     let mut a_chars = a.chars();
     let mut b_chars = b.chars();
 
@@ -456,13 +469,15 @@ fn natural_compare(a: &str, b: &str, case_sensitive: bool) -> Ordering {
             (Some(_), None) => return Ordering::Greater,
             (None, Some(_)) => return Ordering::Less,
             (Some(a_raw), Some(b_raw)) => {
-                let a_char = if case_sensitive { a_raw } else { a_raw.to_ascii_lowercase() };
-                let b_char = if case_sensitive { b_raw } else { b_raw.to_ascii_lowercase() };
+                let a_char = sort_char(a_raw, case_sensitive);
+                let b_char = sort_char(b_raw, case_sensitive);
 
                 if a_char == b_char {
                     continue;
                 }
-                if a_char.is_ascii_digit() && b_char.is_ascii_digit() {
+                if (u32::from('0')..=u32::from('9')).contains(&a_char)
+                    && (u32::from('0')..=u32::from('9')).contains(&b_char)
+                {
                     let n1 = take_numeric(&mut a_chars, a_char);
                     let n2 = take_numeric(&mut b_chars, b_char);
                     match n1.cmp(&n2) {
@@ -470,16 +485,24 @@ fn natural_compare(a: &str, b: &str, case_sensitive: bool) -> Ordering {
                         ord => return ord,
                     }
                 }
-                if a_char.is_alphanumeric() && !b_char.is_alphanumeric() {
+                if char::from_u32(a_char).is_some_and(char::is_alphanumeric)
+                    && !char::from_u32(b_char).is_some_and(char::is_alphanumeric)
+                {
                     return Ordering::Greater;
                 }
-                if !a_char.is_alphanumeric() && b_char.is_alphanumeric() {
+                if !char::from_u32(a_char).is_some_and(char::is_alphanumeric)
+                    && char::from_u32(b_char).is_some_and(char::is_alphanumeric)
+                {
                     return Ordering::Less;
                 }
-                if a_char == '[' && b_char.is_alphanumeric() {
+                if a_char == u32::from('[')
+                    && char::from_u32(b_char).is_some_and(char::is_alphanumeric)
+                {
                     return Ordering::Greater;
                 }
-                if a_char.is_alphanumeric() && b_char == '[' {
+                if char::from_u32(a_char).is_some_and(char::is_alphanumeric)
+                    && b_char == u32::from('[')
+                {
                     return Ordering::Less;
                 }
                 return a_char.cmp(&b_char);
@@ -488,10 +511,10 @@ fn natural_compare(a: &str, b: &str, case_sensitive: bool) -> Ordering {
     }
 }
 
-fn take_numeric(iter: &mut Chars, first: char) -> u32 {
-    let mut sum = first.to_digit(10).unwrap();
+fn take_numeric(iter: &mut impl Iterator<Item = JSChar>, first: u32) -> u32 {
+    let mut sum = first - u32::from('0');
     for c in iter.by_ref() {
-        if let Some(digit) = c.to_digit(10) {
+        if let Some(digit) = c.to_char().and_then(|ch| ch.to_digit(10)) {
             sum = sum * 10 + digit;
         } else {
             break;

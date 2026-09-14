@@ -13,7 +13,8 @@ use crate::{
     context::LintContext,
     fixer::RuleFixer,
     utils::{
-        KnownMemberExpressionProperty, PossibleJestNode, get_node_name, parse_general_jest_fn_call,
+        KnownMemberExpressionProperty, PossibleJestNode, get_node_name_vec,
+        parse_general_jest_fn_call,
     },
 };
 
@@ -179,12 +180,14 @@ fn build_code<'a>(
 fn get_test_fn_call<'a>(
     call_expr: &'a CallExpression<'a>,
 ) -> (&'a str, Option<&'a Expression<'a>>) {
-    let node_name = get_node_name(&call_expr.callee);
-    let is_test_fn = node_name == "jest.fn" || node_name == "vi.fn";
+    let node_name = get_node_name_vec(&call_expr.callee);
+    let is_test_fn = node_name.as_slice()
+        == [oxc_str::JSStr::from("jest"), oxc_str::JSStr::from("fn")]
+        || node_name.as_slice() == [oxc_str::JSStr::from("vi"), oxc_str::JSStr::from("fn")];
 
     if is_test_fn {
-        let framework_spy = match node_name.as_str() {
-            "vi.fn" => "vi.spyOn(",
+        let framework_spy = match node_name[0].as_str() {
+            Some("vi") => "vi.spyOn(",
             _ => "jest.spyOn(",
         };
         return (framework_spy, call_expr.arguments.first().and_then(Argument::as_expression));

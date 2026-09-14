@@ -728,3 +728,25 @@ fn test() {
         .expect_fix(fix)
         .test_and_snapshot();
 }
+
+#[test]
+fn test_jsstr() {
+    use crate::tester::Tester;
+    let pass = vec![
+        r#"test("\uD800", () => {});"#,
+        r#"test("\uDC00", () => {});"#,
+        r#"test("a\uD800b", () => {});"#,
+        r#"test("\uD800\uDC00", () => {});"#,
+    ];
+    let fail = vec![
+        r#"test("\uD800 ", () => {});"#,
+        r#"test(" \uDC00", () => {});"#,
+        r#"test("test \uD800", () => {});"#,
+        r"it(`it \uDC00`, () => {});",
+    ];
+    Tester::new(ValidTitle::NAME, ValidTitle::PLUGIN, pass, fail)
+        .with_snapshot_suffix("jsstr")
+        .intentionally_allow_no_fix_tests()
+        .with_vitest_plugin(true)
+        .test_and_snapshot();
+}

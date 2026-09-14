@@ -139,7 +139,7 @@ impl Rule for NoStaticOnlyClass {
                         let name = if v.computed {
                             format!("[{}]", ctx.source_range(key.span()))
                         } else {
-                            key.static_name().unwrap().to_string()
+                            ctx.source_range(key.span()).to_string()
                         };
 
                         // we need to check is there have a trailing semicolon
@@ -170,7 +170,7 @@ impl Rule for NoStaticOnlyClass {
                         let name = if v.computed {
                             format!("[{}]", ctx.source_range(key.span()))
                         } else {
-                            key.static_name().unwrap().to_string()
+                            ctx.source_range(key.span()).to_string()
                         };
                         let value_str = if value.is_none() {
                             "undefined"
@@ -352,5 +352,23 @@ fn test() {
 
     Tester::new(NoStaticOnlyClass::NAME, NoStaticOnlyClass::PLUGIN, pass, fail)
         .expect_fix(fix)
+        .test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr() {
+    use crate::tester::Tester;
+    let pass = vec![r#"class C { "\uD800"() {} }"#];
+    let fail = vec![
+        r#"class C { static "\uD800"() {} }"#,
+        r#"class C { static "\uDC00" = 1; }"#,
+        r#"class C { static "x\uD800y" = 1; }"#,
+    ];
+    Tester::new(NoStaticOnlyClass::NAME, NoStaticOnlyClass::PLUGIN, pass, fail)
+        .with_snapshot_suffix("jsstr")
+        .expect_fix(vec![
+            (r#"class C { static "\uD800"() {} }"#, r#"const C = { "\uD800"() {}, }"#),
+            (r#"class C { static "\uDC00" = 1; }"#, r#"const C = { "\uDC00": 1, }"#),
+        ])
         .test_and_snapshot();
 }

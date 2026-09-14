@@ -110,12 +110,12 @@ impl RequireAwaitedExpectPoll {
         if is_in_return_context(top_most_node, ctx) {
             ctx.diagnostic(require_awaited_expect_poll_return_diagnostic(
                 call_expr.span,
-                expect.members.first().unwrap().name().unwrap().as_ref(),
+                if expect.members[0].is_name_equal("poll") { "poll" } else { "element" },
             ));
         } else {
             ctx.diagnostic(require_awaited_expect_poll_diagnostic(
                 call_expr.span,
-                expect.members.first().unwrap().name().unwrap().as_ref(),
+                if expect.members[0].is_name_equal("poll") { "poll" } else { "element" },
             ));
         }
     }

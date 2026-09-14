@@ -448,6 +448,7 @@ fn guess_function_name<'a>(ctx: &LintContext<'a>, node_id: NodeId) -> Option<Cow
                 return assign
                     .left
                     .get_identifier_name()
+                    .and_then(oxc_str::JSStr::as_str)
                     .filter(|name| is_valid_identifier_name(name))
                     .map(Cow::Borrowed);
             }

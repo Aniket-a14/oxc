@@ -750,3 +750,25 @@ fn test() {
         .with_jest_plugin(true)
         .test_and_snapshot();
 }
+
+#[test]
+fn test_jsstr_custom_matchers() {
+    use crate::tester::Tester;
+    let mut pass = Vec::new();
+    let mut fail = Vec::new();
+    let mut fixes = Vec::new();
+    for name in ["custom", r"\uD800", r"\uD801", r"\uDC00", r"\uD800\uDC00", r"before\uD800after"] {
+        let source =
+            format!(r#"test("case", async () => {{ expect(value).resolves["{name}"](); }});"#);
+        let fixed = cow_utils::CowUtils::cow_replace(
+            source.as_str(),
+            "expect(value)",
+            "await expect(value)",
+        )
+        .into_owned();
+        pass.push(fixed.clone());
+        fail.push(source.clone());
+        fixes.push((source, fixed, None));
+    }
+    Tester::new(ValidExpect::NAME, ValidExpect::PLUGIN, pass, fail).expect_fix(fixes).test();
+}

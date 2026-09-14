@@ -1,0 +1,150 @@
+---
+source: crates/oxc_linter/src/tester.rs
+---
+
+  ⚠ oxc(no-async-endpoint-handlers): Express endpoint handler for `/normal` should not be `async`.
+   ╭─[no_async_endpoint_handlers.tsx:1:20]
+ 1 │ app.get("/normal", async (req, res) => {});
+   ·                    ──┬──
+   ·                      ╰── Async handler is used here
+   ╰────
+  help: Wrap the async handler and forward errors to `next()` (e.g. `(req, res, next) => Promise.resolve(handler(req, res, next)).catch(next)`).
+        Express does not automatically handle rejected promises from async handlers, which results in unhandled promise rejections and server crashes.
+  note: If you're on Express 5, disable this rule. To allow specific functions, add their names to `allowedNames`.
+
+  ⚠ oxc(no-async-endpoint-handlers): Express endpoint handler for `/normal` should not be `async`.
+   ╭─[no_async_endpoint_handlers.tsx:1:56]
+ 1 │ async function handler(req, res) {} app.get("/normal", handler);
+   · ──┬──                                                  ───┬───
+   ·   │                                                       ╰── and is registered here for route `/normal`
+   ·   ╰── Async handler 'handler' is declared here
+   ╰────
+  help: Wrap the async handler and forward errors to `next()` (e.g. `(req, res, next) => Promise.resolve(handler(req, res, next)).catch(next)`).
+        Express does not automatically handle rejected promises from async handlers, which results in unhandled promise rejections and server crashes.
+  note: If you're on Express 5, disable this rule. To allow specific functions, add their names to `allowedNames`.
+
+  ⚠ oxc(no-async-endpoint-handlers): Express endpoint handler for `/\uD800` should not be `async`.
+   ╭─[no_async_endpoint_handlers.tsx:1:20]
+ 1 │ app.get("/\uD800", async (req, res) => {});
+   ·                    ──┬──
+   ·                      ╰── Async handler is used here
+   ╰────
+  help: Wrap the async handler and forward errors to `next()` (e.g. `(req, res, next) => Promise.resolve(handler(req, res, next)).catch(next)`).
+        Express does not automatically handle rejected promises from async handlers, which results in unhandled promise rejections and server crashes.
+  note: If you're on Express 5, disable this rule. To allow specific functions, add their names to `allowedNames`.
+
+  ⚠ oxc(no-async-endpoint-handlers): Express endpoint handler for `/\uD800` should not be `async`.
+   ╭─[no_async_endpoint_handlers.tsx:1:56]
+ 1 │ async function handler(req, res) {} app.get("/\uD800", handler);
+   · ──┬──                                                  ───┬───
+   ·   │                                                       ╰── and is registered here for route `/\uD800`
+   ·   ╰── Async handler 'handler' is declared here
+   ╰────
+  help: Wrap the async handler and forward errors to `next()` (e.g. `(req, res, next) => Promise.resolve(handler(req, res, next)).catch(next)`).
+        Express does not automatically handle rejected promises from async handlers, which results in unhandled promise rejections and server crashes.
+  note: If you're on Express 5, disable this rule. To allow specific functions, add their names to `allowedNames`.
+
+  ⚠ oxc(no-async-endpoint-handlers): Express endpoint handler for `/\uD800` should not be `async`.
+   ╭─[no_async_endpoint_handlers.tsx:1:20]
+ 1 │ app.get("/\ud800", async (req, res) => {});
+   ·                    ──┬──
+   ·                      ╰── Async handler is used here
+   ╰────
+  help: Wrap the async handler and forward errors to `next()` (e.g. `(req, res, next) => Promise.resolve(handler(req, res, next)).catch(next)`).
+        Express does not automatically handle rejected promises from async handlers, which results in unhandled promise rejections and server crashes.
+  note: If you're on Express 5, disable this rule. To allow specific functions, add their names to `allowedNames`.
+
+  ⚠ oxc(no-async-endpoint-handlers): Express endpoint handler for `/\uD800` should not be `async`.
+   ╭─[no_async_endpoint_handlers.tsx:1:56]
+ 1 │ async function handler(req, res) {} app.get("/\ud800", handler);
+   · ──┬──                                                  ───┬───
+   ·   │                                                       ╰── and is registered here for route `/\uD800`
+   ·   ╰── Async handler 'handler' is declared here
+   ╰────
+  help: Wrap the async handler and forward errors to `next()` (e.g. `(req, res, next) => Promise.resolve(handler(req, res, next)).catch(next)`).
+        Express does not automatically handle rejected promises from async handlers, which results in unhandled promise rejections and server crashes.
+  note: If you're on Express 5, disable this rule. To allow specific functions, add their names to `allowedNames`.
+
+  ⚠ oxc(no-async-endpoint-handlers): Express endpoint handler for `/\uD801` should not be `async`.
+   ╭─[no_async_endpoint_handlers.tsx:1:20]
+ 1 │ app.get("/\uD801", async (req, res) => {});
+   ·                    ──┬──
+   ·                      ╰── Async handler is used here
+   ╰────
+  help: Wrap the async handler and forward errors to `next()` (e.g. `(req, res, next) => Promise.resolve(handler(req, res, next)).catch(next)`).
+        Express does not automatically handle rejected promises from async handlers, which results in unhandled promise rejections and server crashes.
+  note: If you're on Express 5, disable this rule. To allow specific functions, add their names to `allowedNames`.
+
+  ⚠ oxc(no-async-endpoint-handlers): Express endpoint handler for `/\uD801` should not be `async`.
+   ╭─[no_async_endpoint_handlers.tsx:1:56]
+ 1 │ async function handler(req, res) {} app.get("/\uD801", handler);
+   · ──┬──                                                  ───┬───
+   ·   │                                                       ╰── and is registered here for route `/\uD801`
+   ·   ╰── Async handler 'handler' is declared here
+   ╰────
+  help: Wrap the async handler and forward errors to `next()` (e.g. `(req, res, next) => Promise.resolve(handler(req, res, next)).catch(next)`).
+        Express does not automatically handle rejected promises from async handlers, which results in unhandled promise rejections and server crashes.
+  note: If you're on Express 5, disable this rule. To allow specific functions, add their names to `allowedNames`.
+
+  ⚠ oxc(no-async-endpoint-handlers): Express endpoint handler for `/\uDC00` should not be `async`.
+   ╭─[no_async_endpoint_handlers.tsx:1:20]
+ 1 │ app.get("/\uDC00", async (req, res) => {});
+   ·                    ──┬──
+   ·                      ╰── Async handler is used here
+   ╰────
+  help: Wrap the async handler and forward errors to `next()` (e.g. `(req, res, next) => Promise.resolve(handler(req, res, next)).catch(next)`).
+        Express does not automatically handle rejected promises from async handlers, which results in unhandled promise rejections and server crashes.
+  note: If you're on Express 5, disable this rule. To allow specific functions, add their names to `allowedNames`.
+
+  ⚠ oxc(no-async-endpoint-handlers): Express endpoint handler for `/\uDC00` should not be `async`.
+   ╭─[no_async_endpoint_handlers.tsx:1:56]
+ 1 │ async function handler(req, res) {} app.get("/\uDC00", handler);
+   · ──┬──                                                  ───┬───
+   ·   │                                                       ╰── and is registered here for route `/\uDC00`
+   ·   ╰── Async handler 'handler' is declared here
+   ╰────
+  help: Wrap the async handler and forward errors to `next()` (e.g. `(req, res, next) => Promise.resolve(handler(req, res, next)).catch(next)`).
+        Express does not automatically handle rejected promises from async handlers, which results in unhandled promise rejections and server crashes.
+  note: If you're on Express 5, disable this rule. To allow specific functions, add their names to `allowedNames`.
+
+  ⚠ oxc(no-async-endpoint-handlers): Express endpoint handler for `/𐀀` should not be `async`.
+   ╭─[no_async_endpoint_handlers.tsx:1:26]
+ 1 │ app.get("/\uD800\uDC00", async (req, res) => {});
+   ·                          ──┬──
+   ·                            ╰── Async handler is used here
+   ╰────
+  help: Wrap the async handler and forward errors to `next()` (e.g. `(req, res, next) => Promise.resolve(handler(req, res, next)).catch(next)`).
+        Express does not automatically handle rejected promises from async handlers, which results in unhandled promise rejections and server crashes.
+  note: If you're on Express 5, disable this rule. To allow specific functions, add their names to `allowedNames`.
+
+  ⚠ oxc(no-async-endpoint-handlers): Express endpoint handler for `/𐀀` should not be `async`.
+   ╭─[no_async_endpoint_handlers.tsx:1:62]
+ 1 │ async function handler(req, res) {} app.get("/\uD800\uDC00", handler);
+   · ──┬──                                                        ───┬───
+   ·   │                                                             ╰── and is registered here for route `/𐀀`
+   ·   ╰── Async handler 'handler' is declared here
+   ╰────
+  help: Wrap the async handler and forward errors to `next()` (e.g. `(req, res, next) => Promise.resolve(handler(req, res, next)).catch(next)`).
+        Express does not automatically handle rejected promises from async handlers, which results in unhandled promise rejections and server crashes.
+  note: If you're on Express 5, disable this rule. To allow specific functions, add their names to `allowedNames`.
+
+  ⚠ oxc(no-async-endpoint-handlers): Express endpoint handler for `/before\uD800after` should not be `async`.
+   ╭─[no_async_endpoint_handlers.tsx:1:31]
+ 1 │ app.get("/before\uD800after", async (req, res) => {});
+   ·                               ──┬──
+   ·                                 ╰── Async handler is used here
+   ╰────
+  help: Wrap the async handler and forward errors to `next()` (e.g. `(req, res, next) => Promise.resolve(handler(req, res, next)).catch(next)`).
+        Express does not automatically handle rejected promises from async handlers, which results in unhandled promise rejections and server crashes.
+  note: If you're on Express 5, disable this rule. To allow specific functions, add their names to `allowedNames`.
+
+  ⚠ oxc(no-async-endpoint-handlers): Express endpoint handler for `/before\uD800after` should not be `async`.
+   ╭─[no_async_endpoint_handlers.tsx:1:67]
+ 1 │ async function handler(req, res) {} app.get("/before\uD800after", handler);
+   · ──┬──                                                             ───┬───
+   ·   │                                                                  ╰── and is registered here for route `/before\uD800after`
+   ·   ╰── Async handler 'handler' is declared here
+   ╰────
+  help: Wrap the async handler and forward errors to `next()` (e.g. `(req, res, next) => Promise.resolve(handler(req, res, next)).catch(next)`).
+        Express does not automatically handle rejected promises from async handlers, which results in unhandled promise rejections and server crashes.
+  note: If you're on Express 5, disable this rule. To allow specific functions, add their names to `allowedNames`.

@@ -1,12 +1,12 @@
 use nodejs_built_in_modules::is_nodejs_builtin_module;
 use oxc_ast::{
-    AstKind,
+    AstKind, StaticName,
     ast::{Expression, TSModuleReference},
 };
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_span::{GetSpan, Span};
-use oxc_str::CompactStr;
+use oxc_str::{CompactStr, JSStr};
 use rustc_hash::FxHashSet;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -17,7 +17,8 @@ use crate::{
     rule::{DefaultRuleConfig, Rule},
 };
 
-fn no_nodejs_modules_diagnostic(span: Span, module_name: &str) -> OxcDiagnostic {
+fn no_nodejs_modules_diagnostic(span: Span, module_name: JSStr<'_>) -> OxcDiagnostic {
+    let module_name = StaticName::from(module_name);
     OxcDiagnostic::warn(format!("Do not import Node.js builtin module `{module_name}`"))
         .with_help("Use a browser-compatible alternative or add this module to the `allow` list if Node.js usage is intentional.")
         .with_label(span)
@@ -116,12 +117,14 @@ impl Rule for NoNodejsModules {
             return;
         };
 
-        if self.allow.contains(module_name.as_str()) {
+        if module_name.as_str().is_some_and(|name| self.allow.contains(name)) {
             return;
         }
 
-        if module_name.starts_with("node:") || is_nodejs_builtin_module(&module_name) {
-            ctx.diagnostic(no_nodejs_modules_diagnostic(node.span(), &module_name));
+        if module_name.starts_with("node:")
+            || module_name.as_str().is_some_and(is_nodejs_builtin_module)
+        {
+            ctx.diagnostic(no_nodejs_modules_diagnostic(node.span(), module_name));
         }
     }
 }
@@ -216,4 +219,27 @@ fn test() {
     ];
 
     Tester::new(NoNodejsModules::NAME, NoNodejsModules::PLUGIN, pass, fail).test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr_node_prefix() {
+    use crate::tester::Tester;
+
+    let mut pass = Vec::new();
+    let mut fail = Vec::new();
+    for key in [
+        "normal",
+        r"\uD800",
+        r"\ud800",
+        r"\uD801",
+        r"\uDC00",
+        r"\uD800\uDC00",
+        r"before\uD800after",
+    ] {
+        pass.push(format!(r#"import "{key}";"#));
+        fail.push(format!(r#"import "node:{key}";"#));
+        fail.push(format!(r#"require("node:{key}");"#));
+        fail.push(format!(r"import(`node:{key}`);"));
+    }
+    Tester::new(NoNodejsModules::NAME, NoNodejsModules::PLUGIN, pass, fail).test();
 }

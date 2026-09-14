@@ -24,11 +24,11 @@ pub fn run_on_jest_node<'a, 'c>(jest_node: &PossibleJestNode<'a, 'c>, ctx: &'c L
     let Some(matcher) = jest_fn_call.matcher() else {
         return;
     };
-    let Some(alias) = matcher.name() else {
+    let Some(alias) = matcher.name().and_then(oxc_str::JSStr::as_str) else {
         return;
     };
 
-    let Some(method_name) = BadAliasMethodName::from_str(alias.as_ref()) else {
+    let Some(method_name) = BadAliasMethodName::from_str(alias) else {
         return;
     };
     let (name, canonical_name) = method_name.name_with_canonical();

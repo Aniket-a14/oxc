@@ -1,5 +1,5 @@
 use oxc_diagnostics::Result;
-use oxc_str::Str;
+use oxc_str::{JSStr, Str};
 
 use crate::parser::reader::{
     Options,
@@ -12,7 +12,7 @@ use crate::parser::reader::{
 
 #[derive(Debug)]
 pub struct Reader<'a> {
-    source_text: &'a str,
+    source_text: JSStr<'a>,
     units: Vec<CodePoint>,
     index: usize,
     offset: u32,
@@ -58,13 +58,39 @@ impl<'a> Reader<'a> {
         };
 
         Ok(Self {
-            source_text,
+            source_text: source_text.into(),
             units,
             index: 0,
             // If `parse_string_or_template_literal` is `true`, the first character is the opening quote.
             // We need to +1 to skip it.
             offset: u32::from(parse_string_or_template_literal),
         })
+    }
+
+    /// Read a decoded pattern without interpreting JavaScript string escapes.
+    pub fn from_value(value: JSStr<'a>, unicode_mode: bool) -> Self {
+        if let Some(value) = value.as_str() {
+            return Self::initialize(value, unicode_mode, false)
+                .expect("decoded pattern requires no string-literal parsing");
+        }
+        let mut units = Vec::new();
+        let mut offset = 0;
+        for ch in value.chars() {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "a WTF-8 code point is at most 4 bytes"
+            )]
+            let width = ch.to_char().map_or(3, char::len_utf8) as u32;
+            let end = offset + width;
+            StringLiteralParser::handle_code_point(
+                &mut units,
+                ((offset, end), ch.to_u32(), EscapeKind::None),
+                0,
+                unicode_mode,
+            );
+            offset = end;
+        }
+        Self { source_text: value, units, index: 0, offset: 0 }
     }
 
     pub fn offset(&self) -> u32 {
@@ -160,7 +186,13 @@ impl<'a> Reader<'a> {
         false
     }
 
-    pub fn str(&self, start: u32, end: u32) -> Str<'a> {
-        Str::from(&self.source_text[start as usize..end as usize])
+    pub fn str(&self, start: u32, end: u32) -> Option<Str<'a>> {
+        if let Some(source) = self.source_text.as_str() {
+            Some(Str::from(&source[start as usize..end as usize]))
+        } else {
+            std::str::from_utf8(&self.source_text.as_wtf8()[start as usize..end as usize])
+                .ok()
+                .map(Str::from)
+        }
     }
 }

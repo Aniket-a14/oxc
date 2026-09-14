@@ -9,6 +9,7 @@ use oxc_diagnostics::OxcDiagnostic;
 use oxc_ecmascript::{ToBigInt, WithoutGlobalReferenceInformation};
 use oxc_macros::declare_oxc_lint;
 use oxc_span::{GetSpan, Span};
+use oxc_str::JSStr;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -404,7 +405,7 @@ fn is_range(expr: &LogicalExpression, ctx: &LintContext) -> bool {
         if let (Some(left_left), Some(right_right)) =
             (get_string_literal(left_left), get_string_literal(right_right))
         {
-            return left_left <= right_right;
+            return left_left.encode_utf16().le(right_right.encode_utf16());
         }
 
         if let (Some(left_left), Some(right_right)) =
@@ -438,7 +439,7 @@ fn is_range(expr: &LogicalExpression, ctx: &LintContext) -> bool {
         if let (Some(left_right), Some(right_left)) =
             (get_string_literal(left_right), get_string_literal(right_left))
         {
-            return left_right <= right_left;
+            return left_right.encode_utf16().le(right_left.encode_utf16());
         }
 
         if let (Some(left_right), Some(right_left)) =
@@ -468,15 +469,15 @@ fn is_target_literal(expr: &Expression) -> bool {
     get_string_literal(expr).is_some() || is_number(expr)
 }
 
-fn get_string_literal<'a>(expr: &'a Expression) -> Option<&'a str> {
+fn get_string_literal<'a>(expr: &'a Expression<'a>) -> Option<JSStr<'a>> {
     match expr {
-        Expression::StringLiteral(string) => Some(&string.value),
+        Expression::StringLiteral(string) => Some(string.value),
         Expression::TemplateLiteral(template) => {
             if template.quasis.len() != 1 {
                 return None;
             }
 
-            template.quasis.first().map(|e| e.value.raw.as_str())
+            template.single_quasi()
         }
         _ => None,
     }
@@ -1211,4 +1212,26 @@ fn test() {
     ];
 
     Tester::new(Yoda::NAME, Yoda::PLUGIN, pass, fail).expect_fix(fix).test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr_consumers() {
+    use crate::{rule::RuleMeta, tester::Tester};
+    let pass = vec![
+        (
+            r#"if ("\uD800" <= x && x <= "\uDC00") {}"#,
+            Some(serde_json::json!(["never", {"exceptRange":true}])),
+        ),
+        (
+            r#"if ("\uD800\uDC00" <= x && x <= "\uE000") {}"#,
+            Some(serde_json::json!(["never", {"exceptRange":true}])),
+        ),
+    ];
+    let fail = vec![(
+        r#"if ("\uDC00" <= x && x <= "\uD800") {}"#,
+        Some(serde_json::json!(["never", {"exceptRange":true}])),
+    )];
+    Tester::new(Yoda::NAME, Yoda::PLUGIN, pass, fail)
+        .expect_fix(vec![(r#"if ("\uD800" === x) {}"#, r#"if (x === "\uD800") {}"#)])
+        .test();
 }

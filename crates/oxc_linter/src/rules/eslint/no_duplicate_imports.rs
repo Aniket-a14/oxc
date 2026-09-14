@@ -1,9 +1,9 @@
 use rustc_hash::FxHashMap;
 
+use crate::module_record::ModuleSpecifier;
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_span::Span;
-use oxc_str::CompactStr;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -14,7 +14,7 @@ use crate::{
 };
 
 fn no_duplicate_imports_diagnostic(
-    module_name: &str,
+    module_name: impl std::fmt::Display,
     span: Span,
     previous_span: Span,
 ) -> OxcDiagnostic {
@@ -27,7 +27,7 @@ fn no_duplicate_imports_diagnostic(
 }
 
 fn no_duplicate_exports_diagnostic(
-    module_name: &str,
+    module_name: impl std::fmt::Display,
     span: Span,
     previous_span: Span,
 ) -> OxcDiagnostic {
@@ -148,10 +148,11 @@ impl Rule for NoDuplicateImports {
 
     fn run_once(&self, ctx: &LintContext) {
         let module_record = ctx.module_record();
-        let mut import_map: FxHashMap<&CompactStr, Vec<(ImportType, Span, ModuleType, bool)>> =
+        let mut import_map: FxHashMap<&ModuleSpecifier, Vec<(ImportType, Span, ModuleType, bool)>> =
             FxHashMap::default();
         let mut previous_span: Option<Span> = None;
-        let mut side_effect_import_map: FxHashMap<&CompactStr, Vec<Span>> = FxHashMap::default();
+        let mut side_effect_import_map: FxHashMap<&ModuleSpecifier, Vec<Span>> =
+            FxHashMap::default();
 
         for entry in &module_record.import_entries {
             let source = &entry.module_request.name;
@@ -937,5 +938,21 @@ fn test() {
     ];
 
     Tester::new(NoDuplicateImports::NAME, NoDuplicateImports::PLUGIN, pass, fail)
+        .test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr() {
+    use crate::tester::Tester;
+    let pass = vec![r#"import "x\uD800"; import "x\uD801"; import "x\uDC00"; import "x\\uD800";"#];
+    let fail = vec![
+        r#"import "x"; import "x";"#,
+        r#"import "x\uD800"; import "x\ud800";"#,
+        r#"import "x\uDC00"; import "x\udc00";"#,
+        r#"import "x\uD800\uDC00"; import "x𐀀";"#,
+    ];
+    Tester::new(NoDuplicateImports::NAME, NoDuplicateImports::PLUGIN, pass, fail)
+        .with_snapshot_suffix("jsstr")
+        .intentionally_allow_no_fix_tests()
         .test_and_snapshot();
 }

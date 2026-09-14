@@ -1,0 +1,19 @@
+---
+source: crates/oxc_linter/src/tester.rs
+---
+
+  ⚠ typescript(adjacent-overload-signatures): All "\\uD800" signatures should be adjacent.
+   ╭─[adjacent_overload_signatures.tsx:1:15]
+ 1 │ interface I { "\uD800"(): void; normal(): void; "\ud800"(x: number): void; }
+   ·               ────────                          ────────
+   ╰────
+  help: Move all "\\uD800" overload signatures together, placing them consecutively before any other members.
+  note: Function overload signatures represent multiple ways a function can be called. Keeping them adjacent makes it easier for developers to understand all available call signatures at a glance.
+
+  ⚠ typescript(adjacent-overload-signatures): All "\\uDC00" signatures should be adjacent.
+   ╭─[adjacent_overload_signatures.tsx:1:15]
+ 1 │ interface I { "\uDC00"(): void; normal(): void; "\udc00"(x: number): void; }
+   ·               ────────                          ────────
+   ╰────
+  help: Move all "\\uDC00" overload signatures together, placing them consecutively before any other members.
+  note: Function overload signatures represent multiple ways a function can be called. Keeping them adjacent makes it easier for developers to understand all available call signatures at a glance.

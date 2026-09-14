@@ -56,26 +56,26 @@ impl Rule for NoRelativeParentImports {
         match node.kind() {
             // ESM import declarations
             AstKind::ImportDeclaration(import_decl)
-                if is_parent_import(import_decl.source.value.as_str()) =>
+                if is_parent_import(import_decl.source.value) =>
             {
                 ctx.diagnostic(no_relative_parent_imports_diagnostic(import_decl.source.span));
             }
             // ESM export { } from '...'
             AstKind::ExportFromDeclaration(export_decl) => {
-                if is_parent_import(export_decl.source.value.as_str()) {
+                if is_parent_import(export_decl.source.value) {
                     ctx.diagnostic(no_relative_parent_imports_diagnostic(export_decl.source.span));
                 }
             }
             // ESM export * from '...'
             AstKind::ExportAllDeclaration(export_decl)
-                if is_parent_import(export_decl.source.value.as_str()) =>
+                if is_parent_import(export_decl.source.value) =>
             {
                 ctx.diagnostic(no_relative_parent_imports_diagnostic(export_decl.source.span));
             }
             // Dynamic import expressions: import('../foo')
             AstKind::ImportExpression(import_expr) => {
                 if let Expression::StringLiteral(str_literal) = &import_expr.source
-                    && is_parent_import(str_literal.value.as_str())
+                    && is_parent_import(str_literal.value)
                 {
                     ctx.diagnostic(no_relative_parent_imports_diagnostic(str_literal.span));
                 }
@@ -83,7 +83,7 @@ impl Rule for NoRelativeParentImports {
             // CommonJS require() calls
             AstKind::CallExpression(call_expr) => {
                 if let Some(str_literal) = call_expr.common_js_require()
-                    && is_parent_import(str_literal.value.as_str())
+                    && is_parent_import(str_literal.value)
                 {
                     ctx.diagnostic(no_relative_parent_imports_diagnostic(str_literal.span));
                 }
@@ -95,12 +95,12 @@ impl Rule for NoRelativeParentImports {
 
 /// Check if the import path is a relative parent import.
 /// Matches paths like `../foo`, `..`, `./../foo`, etc.
-fn is_parent_import(path: &str) -> bool {
-    let mut normalized = path;
-    while let Some(rest) = normalized.strip_prefix("./") {
+fn is_parent_import(path: oxc_str::JSStr) -> bool {
+    let mut normalized = path.as_wtf8();
+    while let Some(rest) = normalized.strip_prefix(b"./") {
         normalized = rest;
     }
-    normalized == ".." || normalized.starts_with("../")
+    normalized == b".." || normalized.starts_with(b"../")
 }
 
 #[test]
@@ -150,4 +150,16 @@ fn test() {
         .change_rule_path("index.js")
         .with_import_plugin(true)
         .test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr_consumers() {
+    use crate::{rule::RuleMeta, tester::Tester};
+    let pass = vec![r#"import "./x\uD800";"#, r#"require("x\uDC00");"#];
+    let fail = vec![
+        r#"import "../x\uD800";"#,
+        r#"export * from "../x\uDC00";"#,
+        r#"require("../x\uD800\uDC00");"#,
+    ];
+    Tester::new(NoRelativeParentImports::NAME, NoRelativeParentImports::PLUGIN, pass, fail).test();
 }

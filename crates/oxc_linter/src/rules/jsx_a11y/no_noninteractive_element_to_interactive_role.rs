@@ -169,14 +169,15 @@ impl Rule for NoNoninteractiveElementToInteractiveRole {
             return;
         };
 
-        let role = role_value.value.as_str().trim();
+        let role = role_value.value;
 
         // Take only the first role token (whitespace-separated).
-        let Some(first_role) = role.split_whitespace().next() else {
+        let Some(first_role) = role.split_whitespace().next().and_then(oxc_str::JSStr::as_str)
+        else {
             return;
         };
 
-        let element_type = get_element_type(ctx, jsx_el);
+        let Some(element_type) = get_element_type(ctx, jsx_el).into_utf8() else { return };
 
         // Skip custom/unknown elements — only check known HTML tags.
         if !HTML_TAG.contains(element_type.as_ref()) {

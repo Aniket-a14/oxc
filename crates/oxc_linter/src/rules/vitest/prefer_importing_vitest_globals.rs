@@ -137,7 +137,7 @@ impl Rule for PreferImportingVitestGlobals {
                 continue;
             };
 
-            if is_vitest_import_source(import_decl.source.value.as_str())
+            if import_decl.source.value.as_str().is_some_and(is_vitest_import_source)
                 && import_decl.import_kind == ImportOrExportKind::Value
             {
                 continue;
@@ -180,10 +180,9 @@ impl PreferImportingVitestGlobals {
     ) -> RuleFix {
         let module_record = ctx.module_record();
 
-        let vitest_esm_import = module_record
-            .import_entries
-            .iter()
-            .find(|e| is_vitest_import_source(e.module_request.name()) && !e.is_type);
+        let vitest_esm_import = module_record.import_entries.iter().find(|e| {
+            e.module_request.name().as_str().is_some_and(is_vitest_import_source) && !e.is_type
+        });
 
         // 1. Existing `import { ... }` from a Vitest source — append to named specifiers.
         if let Some(entry) = vitest_esm_import
@@ -230,7 +229,7 @@ impl PreferImportingVitestGlobals {
         }
 
         let import_source = vitest_esm_import
-            .map(|entry| entry.module_request.name())
+            .and_then(|entry| entry.module_request.name().as_str())
             .or_else(|| Self::find_vitest_require_source(ctx))
             .unwrap_or("vitest");
 
@@ -257,7 +256,7 @@ impl PreferImportingVitestGlobals {
             let is_vitest_require = call.arguments.len() == 1
                 && call.arguments.first().is_some_and(|arg| {
                     arg.as_expression().is_some_and(|expr| {
-                        matches!(expr, Expression::StringLiteral(lit) if is_vitest_import_source(lit.value.as_str()))
+                        matches!(expr, Expression::StringLiteral(lit) if lit.value.as_str().is_some_and(is_vitest_import_source))
                     })
                 });
 
@@ -314,7 +313,7 @@ impl PreferImportingVitestGlobals {
 
             let Some(source) = call.arguments.first().and_then(|arg| {
                 arg.as_expression().and_then(|expr| match expr {
-                    Expression::StringLiteral(lit) => Some(lit.value.as_str()),
+                    Expression::StringLiteral(lit) => lit.value.as_str(),
                     _ => None,
                 })
             }) else {

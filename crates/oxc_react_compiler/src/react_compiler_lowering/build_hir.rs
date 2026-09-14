@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use cow_utils::CowUtils;
 use rustc_hash::FxHashSet;
 
@@ -21,7 +19,7 @@ use oxc_ast::ast::BinaryOperator;
 use oxc_ast_visit::Visit;
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_span::{GetSpan, Span};
-use oxc_str::{Ident, Str, format_ident, static_ident};
+use oxc_str::{Ident, JSChar, JSStr, JSStrBuilder, Str, format_ident, static_ident};
 
 use crate::react_compiler_lowering::FunctionNode;
 use crate::react_compiler_lowering::find_context_identifiers::find_context_identifiers;
@@ -784,6 +782,7 @@ fn lower_inner<'a>(
             body_span = Some(block.span);
             directives = ArenaVec::from_iter_in(
                 block.directives.iter().map(|d| FunctionDirective {
+                    raw: d.directive,
                     value: d.expression.value,
                     span: d.span,
                     expression_span: d.expression.span,
@@ -943,7 +942,7 @@ fn lower_member_expression_impl<'a>(
                 Some(obj) => obj,
                 None => lower_expression_to_temporary(builder, &m.object)?,
             };
-            let prop_literal = PropertyLiteral::String(m.property.name);
+            let prop_literal = PropertyLiteral::String(m.property.name.into());
             let value = InstructionValue::PropertyLoad {
                 object,
                 property: prop_literal,
@@ -1009,7 +1008,7 @@ fn lower_member_expression_impl<'a>(
             )?;
             Ok(LoweredMemberExpression {
                 object,
-                property: MemberProperty::Literal(PropertyLiteral::String(Ident::empty())),
+                property: MemberProperty::Literal(PropertyLiteral::String(Ident::empty().into())),
                 computed: false,
                 property_span: None,
                 value: InstructionValue::Primitive { value: PrimitiveValue::Undefined, span },
@@ -1126,7 +1125,7 @@ fn lower_member_expression_for_update<'a>(
             let span = Some(m.span);
             let property_span = Some(m.property.span);
             let object = lower_expression_to_temporary(builder, &m.object)?;
-            let prop_literal = PropertyLiteral::String(m.property.name);
+            let prop_literal = PropertyLiteral::String(m.property.name.into());
             let value = InstructionValue::PropertyLoad {
                 object,
                 property: prop_literal,
@@ -1183,7 +1182,7 @@ fn lower_member_expression_for_update<'a>(
             )?;
             Ok(LoweredMemberExpression {
                 object,
-                property: MemberProperty::Literal(PropertyLiteral::String(Ident::empty())),
+                property: MemberProperty::Literal(PropertyLiteral::String(Ident::empty().into())),
                 computed: false,
                 property_span: None,
                 value: InstructionValue::Primitive { value: PrimitiveValue::Undefined, span },
@@ -1860,7 +1859,7 @@ fn lower_member_assignment_target<'a>(
                 builder,
                 InstructionValue::PropertyStore {
                     object,
-                    property: PropertyLiteral::String(member.property.name),
+                    property: PropertyLiteral::String(member.property.name.into()),
                     computed: false,
                     property_span: Some(member.property.span),
                     value,
@@ -4307,7 +4306,7 @@ fn lower_member_assignment_expression<'a>(
                 builder,
                 InstructionValue::PropertyStore {
                     object,
-                    property: PropertyLiteral::String(member.property.name),
+                    property: PropertyLiteral::String(member.property.name.into()),
                     computed: false,
                     property_span: Some(member.property.span),
                     value,
@@ -4646,12 +4645,7 @@ fn lower_jsx_element_expr<'a>(
                 let value = match &attr.value {
                     Some(oxc::JSXAttributeValue::StringLiteral(s)) => {
                         let str_span = Some(s.span);
-                        let decoded = match decode_jsx_entities(s.value.as_str()) {
-                            Cow::Borrowed(text) => Str::from(text),
-                            Cow::Owned(text) => {
-                                Str::from_str_in(&text, &builder.environment().allocator)
-                            }
-                        };
+                        let decoded = decode_jsx_entities(s.value, builder.environment().allocator);
                         lower_value_to_temporary(
                             builder,
                             InstructionValue::Primitive {
@@ -4889,7 +4883,7 @@ fn lower_jsx_element_name<'a>(
             let place = lower_value_to_temporary(
                 builder,
                 InstructionValue::Primitive {
-                    value: PrimitiveValue::String(Str::from_str_in(
+                    value: PrimitiveValue::String(JSStr::from_str_in(
                         &tag,
                         &builder.environment().allocator,
                     )),
@@ -4930,7 +4924,7 @@ fn lower_jsx_member_expression<'a>(
     let prop_name = expr.property.name.as_str();
     let value = InstructionValue::PropertyLoad {
         object,
-        property: PropertyLiteral::String(Ident::from(prop_name)),
+        property: PropertyLiteral::String(Ident::from(prop_name).into()),
         computed: false,
         property_span: Some(expr.property.span),
         span: expr_span,
@@ -4971,24 +4965,14 @@ fn lower_jsx_element<'a>(
         oxc::JSXChild::Text(text) => {
             // oxc keeps JSX text raw; decode entities first so the value matches
             // Babel's `JSXText.value` (the Babel bridge decoded in convert_ast).
-            let decoded = decode_jsx_entities(text.value.as_str());
+            let decoded = decode_jsx_entities(text.value.into(), builder.environment().allocator);
             // FBT whitespace normalization differs from standard JSX.
             // Since the fbt transform runs after, preserve all whitespace
             // in FBT subtrees as is.
             let value = if builder.fbt_depth > 0 {
-                Some((
-                    match decoded {
-                        Cow::Borrowed(text) => Str::from(text),
-                        Cow::Owned(ref text) => {
-                            Str::from_str_in(text, &builder.environment().allocator)
-                        }
-                    },
-                    0,
-                ))
+                Some((decoded, 0))
             } else {
-                trim_jsx_text(&decoded).map(|(text, start)| {
-                    (Str::from_str_in(&text, &builder.environment().allocator), start)
-                })
+                trim_jsx_text(decoded, builder.environment().allocator)
             };
             match value {
                 None => Ok(None),
@@ -5308,7 +5292,79 @@ fn split_line_endings(s: &str) -> Vec<&str> {
 
 /// Trims whitespace according to the JSX spec.
 /// Implementation ported from Babel's cleanJSXElementLiteralChild.
-fn trim_jsx_text(original: &str) -> Option<(String, usize)> {
+fn trim_jsx_text<'a>(
+    original: JSStr<'a>,
+    allocator: &'a oxc_allocator::Allocator,
+) -> Option<(JSStr<'a>, usize)> {
+    if let Some(original) = original.as_str() {
+        return trim_utf8_jsx_text(original)
+            .map(|(text, start)| (JSStr::from_str_in(&text, &allocator), start));
+    }
+
+    let mut last_non_empty_line = 0;
+    let mut line = 0;
+    let mut after_cr = false;
+    for ch in original.chars() {
+        match ch.to_char() {
+            Some('\n') if after_cr => {}
+            Some('\r' | '\n') => line += 1,
+            Some(' ' | '\t') => {}
+            _ => last_non_empty_line = line,
+        }
+        after_cr = ch.to_char() == Some('\r');
+    }
+
+    let mut output = JSStrBuilder::with_capacity_in(original.len(), allocator);
+    let mut first_retained_offset = None;
+    let mut offset = 0;
+    let mut line = 0;
+    let mut line_has_content = false;
+    let mut spaces = 0;
+    let mut chars = original.chars().peekable();
+    while let Some(ch) = chars.next() {
+        let len = ch.to_char().map_or(3, char::len_utf8);
+        match ch.to_char() {
+            Some('\r' | '\n') => {
+                if line_has_content && line != last_non_empty_line {
+                    output.push(' ');
+                }
+                if ch.to_char() == Some('\r')
+                    && chars.peek().is_some_and(|ch| ch.to_char() == Some('\n'))
+                {
+                    chars.next();
+                    offset += 1;
+                }
+                spaces = 0;
+                line_has_content = false;
+                line += 1;
+            }
+            Some(' ' | '\t') => {
+                if line == 0 || line_has_content {
+                    spaces += 1;
+                }
+            }
+            _ => {
+                first_retained_offset.get_or_insert(offset - spaces);
+                for _ in 0..spaces {
+                    output.push(' ');
+                }
+                spaces = 0;
+                output.push_js_char(ch);
+                line_has_content = true;
+            }
+        }
+        offset += len;
+    }
+    if spaces != 0 {
+        first_retained_offset.get_or_insert(offset - spaces);
+        for _ in 0..spaces {
+            output.push(' ');
+        }
+    }
+    first_retained_offset.map(|start| (output.into_js_str(), start))
+}
+
+fn trim_utf8_jsx_text(original: &str) -> Option<(String, usize)> {
     // Split on \r\n, \n, or \r to handle all line ending styles (matching TS split(/\r\n|\n|\r/))
     let lines: Vec<&str> = split_line_endings(original);
 
@@ -5389,7 +5445,7 @@ fn source_offset_for_decoded_jsx_text(source: &str, target_offset: usize) -> usi
             if !word.contains('&')
                 && let Some(decoded) = decode_jsx_entity(word)
             {
-                let decoded_len = decoded.len_utf8();
+                let decoded_len = decoded.to_char().map_or(3, char::len_utf8);
                 if decoded_offset + decoded_len > target_offset {
                     return source_offset;
                 }
@@ -5412,11 +5468,47 @@ fn source_offset_for_decoded_jsx_text(source: &str, target_offset: usize) -> usi
 /// Babel's decoded text. oxc keeps JSX text raw in the AST. Mirrors the
 /// `decode_jsx_entities` helper in `convert_ast.rs`. Unrecognized `&…;` sequences
 /// are kept verbatim.
-fn decode_jsx_entities(s: &str) -> Cow<'_, str> {
-    if !s.contains('&') {
-        return Cow::Borrowed(s);
+fn decode_jsx_entities<'a>(s: JSStr<'a>, allocator: &'a oxc_allocator::Allocator) -> JSStr<'a> {
+    if let Some(s) = s.as_str() {
+        return decode_utf8_jsx_entities(s, allocator);
     }
-    let mut out = String::with_capacity(s.len());
+    if !s.contains("&") {
+        return s;
+    }
+    let mut out = JSStrBuilder::with_capacity_in(s.len(), allocator);
+    let bytes = s.as_wtf8();
+    let mut start = 0;
+    let mut offset = 0;
+    for ch in s.chars() {
+        if let Some(ch) = ch.to_char() {
+            offset += ch.len_utf8();
+        } else {
+            // A lone surrogate cannot be part of a valid entity name. Decode each
+            // scalar run independently and retain the intervening surrogate.
+            // SAFETY: The scan visited only scalar values between these boundaries.
+            let run = unsafe { std::str::from_utf8_unchecked(&bytes[start..offset]) };
+            append_decoded_jsx_entities(run, &mut out);
+            out.push_js_char(ch);
+            offset += 3;
+            start = offset;
+        }
+    }
+    // SAFETY: The final run contains only scalar values, by the same scan above.
+    let run = unsafe { std::str::from_utf8_unchecked(&bytes[start..]) };
+    append_decoded_jsx_entities(run, &mut out);
+    out.into_js_str()
+}
+
+fn decode_utf8_jsx_entities<'a>(s: &'a str, allocator: &'a oxc_allocator::Allocator) -> JSStr<'a> {
+    if !s.contains('&') {
+        return JSStr::from(s);
+    }
+    let mut out = JSStrBuilder::with_capacity_in(s.len(), allocator);
+    append_decoded_jsx_entities(s, &mut out);
+    out.into_js_str()
+}
+
+fn append_decoded_jsx_entities(s: &str, out: &mut JSStrBuilder<'_>) {
     let mut chars = s.char_indices();
     let mut prev = 0;
     while let Some((i, c)) = chars.next() {
@@ -5438,7 +5530,7 @@ fn decode_jsx_entities(s: &str) -> Cow<'_, str> {
         prev = end + 1;
         let word = &s[start + 1..end];
         match decode_jsx_entity(word) {
-            Some(c) => out.push(c),
+            Some(c) => out.push_js_char(c),
             // Not a recognized entity — keep the `&…;` literal.
             None => {
                 out.push('&');
@@ -5448,18 +5540,17 @@ fn decode_jsx_entities(s: &str) -> Cow<'_, str> {
         }
     }
     out.push_str(&s[prev..]);
-    Cow::Owned(out)
 }
 
-fn decode_jsx_entity(word: &str) -> Option<char> {
+fn decode_jsx_entity(word: &str) -> Option<JSChar> {
     if let Some(num) = word.strip_prefix('#') {
         if let Some(hex) = num.strip_prefix(['x', 'X']) {
-            u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
+            u32::from_str_radix(hex, 16).ok().and_then(JSChar::from_u32)
         } else {
-            num.parse::<u32>().ok().and_then(char::from_u32)
+            num.parse::<u32>().ok().and_then(JSChar::from_u32)
         }
     } else {
-        oxc_syntax::xml_entities::XML_ENTITIES.get(word).copied()
+        oxc_syntax::xml_entities::XML_ENTITIES.get(word).and_then(|&ch| JSChar::from_u32(ch as u32))
     }
 }
 
@@ -5543,7 +5634,7 @@ fn lower_object_method<'a>(
     }
 
     let key = lower_object_property_key(builder, &method.key, method.computed)?
-        .unwrap_or(ObjectPropertyKey::String { name: Ident::empty(), span: None });
+        .unwrap_or(ObjectPropertyKey::String { name: JSStr::empty(), span: None });
 
     let func = match &method.value {
         oxc::Expression::FunctionExpression(func) => func,
@@ -5574,10 +5665,9 @@ fn lower_object_property_key<'a>(
     computed: bool,
 ) -> Result<Option<ObjectPropertyKey<'a>>, OxcDiagnostic> {
     match key {
-        oxc::PropertyKey::StringLiteral(lit) => Ok(Some(ObjectPropertyKey::String {
-            name: Ident::from(lit.value.as_str()),
-            span: Some(lit.span),
-        })),
+        oxc::PropertyKey::StringLiteral(lit) => {
+            Ok(Some(ObjectPropertyKey::String { name: lit.value, span: Some(lit.span) }))
+        }
         oxc::PropertyKey::StaticIdentifier(ident) if !computed => {
             Ok(Some(ObjectPropertyKey::Identifier { name: ident.name, span: Some(ident.span) }))
         }
@@ -5593,10 +5683,9 @@ fn lower_object_property_key<'a>(
         // BigInt property keys are coerced to their canonical decimal string at
         // runtime. Preserve that value rather than the source spelling so keys
         // such as `0x10n` and `16n` remain equivalent.
-        oxc::PropertyKey::BigIntLiteral(lit) if !computed => Ok(Some(ObjectPropertyKey::String {
-            name: Ident::from(lit.value.as_str()),
-            span: Some(lit.span),
-        })),
+        oxc::PropertyKey::BigIntLiteral(lit) if !computed => {
+            Ok(Some(ObjectPropertyKey::String { name: lit.value.into(), span: Some(lit.span) }))
+        }
         _ if computed => {
             let place = lower_expression_to_temporary(builder, key.to_expression())?;
             Ok(Some(ObjectPropertyKey::Computed { name: place, span: Some(key.span()) }))
@@ -6822,5 +6911,52 @@ fn collect_catch_pattern_identifier_spans(pat: &oxc::BindingPattern, locs: &mut 
         // The original matched only Identifier/Object/Array; AssignmentPattern
         // (destructuring defaults) fell through its `_ => {}` catch-all.
         oxc::BindingPattern::AssignmentPattern(_) => {}
+    }
+}
+
+#[cfg(test)]
+mod jsstr_tests {
+    use super::{decode_jsx_entities, trim_jsx_text, trim_utf8_jsx_text};
+    use oxc_allocator::Allocator;
+    use oxc_str::JSStrBuilder;
+
+    #[test]
+    fn jsx_entity_decoding_retains_existing_surrogates() {
+        let allocator = Allocator::new();
+        for unit in [0xD800, 0xD801, 0xDC00] {
+            let mut builder = JSStrBuilder::new_in(&allocator);
+            builder.push_str("before &amp;");
+            builder.push_code_unit(unit);
+            builder.push_str("&quot; after");
+            let decoded = decode_jsx_entities(builder.into_js_str(), &allocator);
+            let expected: Vec<_> =
+                "before &".encode_utf16().chain([unit]).chain("\" after".encode_utf16()).collect();
+            assert_eq!(decoded.encode_utf16().collect::<Vec<_>>(), expected);
+        }
+    }
+
+    #[test]
+    fn jsx_whitespace_normalization_matches_scalar_path() {
+        let allocator = Allocator::new();
+        for unit in [0xD800, 0xDC00] {
+            for prefix in ["", "  ", "\t", "\n  ", "a\r\n \t", "\r\n\r\n", "π\n"] {
+                for suffix in ["", "  ", "\t", "\n  ", "\n  b\r", "\r\n\r\n", "\nπ"] {
+                    let mut builder = JSStrBuilder::new_in(&allocator);
+                    builder.push_str(prefix);
+                    builder.push_code_unit(unit);
+                    builder.push_str(suffix);
+                    let input = builder.into_js_str();
+                    // A private-use scalar has the same byte width and whitespace
+                    // behavior as a surrogate, so offsets must also agree.
+                    let scalar = format!("{prefix}\u{E000}{suffix}");
+                    let (expected, expected_offset) = trim_utf8_jsx_text(&scalar).unwrap();
+                    let (actual, actual_offset) = trim_jsx_text(input, &allocator).unwrap();
+                    let actual: String =
+                        actual.chars().map(|ch| ch.to_char().unwrap_or('\u{E000}')).collect();
+                    assert_eq!(actual, expected, "{input:?}");
+                    assert_eq!(actual_offset, expected_offset, "{input:?}");
+                }
+            }
+        }
     }
 }

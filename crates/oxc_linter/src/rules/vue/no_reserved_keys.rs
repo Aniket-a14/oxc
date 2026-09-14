@@ -49,11 +49,15 @@ pub(super) const RESERVED_KEYS: &[&str] = &[
     "$destroy",
 ];
 
-fn reserved_key_diagnostic(name: &str, span: Span) -> OxcDiagnostic {
+fn reserved_key_diagnostic(name: impl std::fmt::Display, span: Span) -> OxcDiagnostic {
     OxcDiagnostic::warn(format!("Key `{name}` is reserved.")).with_label(span)
 }
 
-fn starts_with_underscore_diagnostic(key: &str, group: &str, span: Span) -> OxcDiagnostic {
+fn starts_with_underscore_diagnostic(
+    key: impl std::fmt::Display,
+    group: &str,
+    span: Span,
+) -> OxcDiagnostic {
     OxcDiagnostic::warn(format!("Key `{key}` is reserved in `{group}` group.")).with_label(span)
 }
 
@@ -128,12 +132,8 @@ impl Rule for NoReservedKeys {
         match node.kind() {
             AstKind::CallExpression(call) => self.check_define_props(call, ctx),
             AstKind::ObjectProperty(prop) => {
-                let Some(group_name) =
-                    prop.key.static_name().and_then(oxc_ast::StaticName::into_utf8)
-                else {
-                    return;
-                };
-                let group = group_name.as_ref();
+                let Some(group_name) = prop.key.static_name() else { return };
+                let Some(group) = group_name.as_str() else { return };
                 if !self.is_target_group(group) {
                     return;
                 }
@@ -149,11 +149,11 @@ impl Rule for NoReservedKeys {
                             let Some(Expression::StringLiteral(lit)) = elem.as_expression() else {
                                 continue;
                             };
-                            if self.is_reserved(lit.value.as_str()) {
-                                ctx.diagnostic(reserved_key_diagnostic(
-                                    lit.value.as_str(),
-                                    lit.span,
-                                ));
+                            let Some(value) = lit.value.as_str() else {
+                                continue;
+                            };
+                            if self.is_reserved(value) {
+                                ctx.diagnostic(reserved_key_diagnostic(value, lit.span));
                             }
                         }
                     }
@@ -221,15 +221,13 @@ impl NoReservedKeys {
     fn check_keys<'a>(&self, group: &str, obj: &ObjectExpression<'a>, ctx: &LintContext<'a>) {
         for prop_kind in &obj.properties {
             let ObjectPropertyKind::ObjectProperty(p) = prop_kind else { continue };
-            let Some(name) = p.key.static_name().and_then(oxc_ast::StaticName::into_utf8) else {
-                continue;
-            };
+            let Some(name) = p.key.static_name() else { continue };
             let span = p.key.span();
-            let n = name.as_ref();
-            if self.is_reserved(n) {
-                ctx.diagnostic(reserved_key_diagnostic(n, span));
-            } else if matches!(group, "data" | "asyncData") && n.starts_with('_') {
-                ctx.diagnostic(starts_with_underscore_diagnostic(n, group, span));
+            let n = name.as_js_str();
+            if n.as_str().is_some_and(|name| self.is_reserved(name)) {
+                ctx.diagnostic(reserved_key_diagnostic(&name, span));
+            } else if matches!(group, "data" | "asyncData") && n.starts_with("_") {
+                ctx.diagnostic(starts_with_underscore_diagnostic(&name, group, span));
             }
         }
     }
@@ -249,22 +247,19 @@ impl NoReservedKeys {
                 Expression::ArrayExpression(arr) => {
                     for elem in &arr.elements {
                         if let Some(Expression::StringLiteral(lit)) = elem.as_expression()
-                            && self.is_reserved(lit.value.as_str())
+                            && let Some(value) = lit.value.as_str()
+                            && self.is_reserved(value)
                         {
-                            ctx.diagnostic(reserved_key_diagnostic(lit.value.as_str(), lit.span));
+                            ctx.diagnostic(reserved_key_diagnostic(value, lit.span));
                         }
                     }
                 }
                 Expression::ObjectExpression(obj) => {
                     for prop_kind in &obj.properties {
                         let ObjectPropertyKind::ObjectProperty(p) = prop_kind else { continue };
-                        let Some(name) =
-                            p.key.static_name().and_then(oxc_ast::StaticName::into_utf8)
-                        else {
-                            continue;
-                        };
-                        if self.is_reserved(name.as_ref()) {
-                            ctx.diagnostic(reserved_key_diagnostic(name.as_ref(), p.key.span()));
+                        let Some(name) = p.key.static_name() else { continue };
+                        if name.as_str().is_some_and(|name| self.is_reserved(name)) {
+                            ctx.diagnostic(reserved_key_diagnostic(&name, p.key.span()));
                         }
                     }
                 }
@@ -289,9 +284,9 @@ impl NoReservedKeys {
             TSSignature::TSMethodSignature(method) => &method.key,
             _ => return,
         };
-        let Some(name) = key.static_name().and_then(oxc_ast::StaticName::into_utf8) else { return };
-        if self.is_reserved(name.as_ref()) {
-            ctx.diagnostic(reserved_key_diagnostic(name.as_ref(), key.span()));
+        let Some(name) = key.static_name() else { return };
+        if name.as_str().is_some_and(|name| self.is_reserved(name)) {
+            ctx.diagnostic(reserved_key_diagnostic(&name, key.span()));
         }
     }
 }

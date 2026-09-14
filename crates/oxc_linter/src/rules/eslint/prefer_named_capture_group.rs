@@ -110,20 +110,20 @@ fn check_static_arguments(arg0: Option<&Argument>, arg1: Option<&Argument>, ctx:
         return;
     };
 
-    let Some(pattern_text) = static_string_value(pattern_expr) else {
+    let allocator = Allocator::default();
+    let Some(pattern_text) = static_string_value(pattern_expr, &allocator) else {
         return;
     };
 
     let flags_text = arg1
         .and_then(Argument::as_expression)
         .map(Expression::get_inner_expression)
-        .and_then(static_string_value);
+        .and_then(|expr| static_string_value(expr, &allocator));
 
-    let allocator = Allocator::default();
-    let Ok(pattern) = LiteralParser::new(
+    let Ok(pattern) = LiteralParser::from_value(
         &allocator,
-        &pattern_text,
-        flags_text.as_deref(),
+        pattern_text,
+        flags_text,
         Options { pattern_span_offset: pattern_expr.span().start, flags_span_offset: 0 },
     )
     .parse() else {
@@ -228,5 +228,25 @@ fn test() {
     ];
 
     Tester::new(PreferNamedCaptureGroup::NAME, PreferNamedCaptureGroup::PLUGIN, pass, fail)
+        .test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr() {
+    use crate::tester::Tester;
+    let pass = vec![
+        r#"new RegExp("\uD800" + "(?:x)")"#,
+        r#"new RegExp("\uDC00" + "(?<name>x)")"#,
+        r#"new RegExp("(" + "x)", "\uD800")"#,
+    ];
+    let fail = vec![
+        r#"new RegExp("\uD800" + "(x)")"#,
+        r#"new RegExp(`\uDC00${"(x)"}`)"#,
+        r#"new RegExp("\uD800" + "\uDC00(x)")"#,
+        r#"new RegExp("\\" + "\uD800(x)")"#,
+    ];
+    Tester::new(PreferNamedCaptureGroup::NAME, PreferNamedCaptureGroup::PLUGIN, pass, fail)
+        .with_snapshot_suffix("jsstr")
+        .intentionally_allow_no_fix_tests()
         .test_and_snapshot();
 }

@@ -171,10 +171,16 @@ impl Rule for IframeMissingSandbox {
 }
 
 fn validate_sandbox_value(literal: &StringLiteral, ctx: &LintContext) {
-    let attrs = literal.value.split(' ');
+    let attrs = literal.value.as_wtf8().split(|&byte| byte == b' ');
     let mut has_allow_same_origin = false;
     let mut has_allow_scripts = false;
-    for trimmed_atr in attrs.into_iter().map(str::trim) {
+    for attr in attrs {
+        let Ok(attr) = std::str::from_utf8(attr) else {
+            // Allowed sandbox tokens are ASCII. Keep checking the other tokens.
+            ctx.diagnostic(invalid_sandbox_prop(literal.span, ctx.source_range(literal.span)));
+            continue;
+        };
+        let trimmed_atr = attr.trim();
         if !is_allowed_value(trimmed_atr) {
             ctx.diagnostic(invalid_sandbox_prop(literal.span, trimmed_atr));
         }
@@ -273,4 +279,14 @@ fn test() {
 
     Tester::new(IframeMissingSandbox::NAME, IframeMissingSandbox::PLUGIN, pass, fail)
         .test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr_consumers() {
+    use crate::{rule::RuleMeta, tester::Tester};
+    let pass = vec![r#"React.createElement("iframe", {sandbox:"allow-forms"})"#];
+    let fail = vec![
+        r#"React.createElement("iframe", {sandbox:"allow-scripts \uD800 allow-same-origin"})"#,
+    ];
+    Tester::new(IframeMissingSandbox::NAME, IframeMissingSandbox::PLUGIN, pass, fail).test();
 }

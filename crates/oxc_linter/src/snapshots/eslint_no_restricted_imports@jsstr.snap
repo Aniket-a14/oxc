@@ -1,0 +1,51 @@
+---
+source: crates/oxc_linter/src/tester.rs
+---
+
+  ⚠ eslint(no-restricted-imports): 'blocked\uD800' import is restricted from being used by a pattern.
+   ╭─[no_restricted_imports.tsx:1:1]
+ 1 │ import "blocked\uD800";
+   · ───────────────────────
+   ╰────
+
+  ⚠ eslint(no-restricted-imports): 'blocked\uDC00' import is restricted from being used by a pattern.
+   ╭─[no_restricted_imports.tsx:1:1]
+ 1 │ import x from "blocked\uDC00";
+   · ──────────────────────────────
+   ╰────
+
+  ⚠ eslint(no-restricted-imports): 'blocked\uD800' import is restricted from being used by a pattern.
+   ╭─[no_restricted_imports.tsx:1:1]
+ 1 │ export * from "blocked\uD800";
+   · ──────────────────────────────
+   ╰────
+
+  ⚠ eslint(no-restricted-imports): 'blocked\uDC00' import is restricted from being used by a pattern.
+   ╭─[no_restricted_imports.tsx:1:1]
+ 1 │ export {x} from "blocked\uDC00";
+   · ────────────────────────────────
+   ╰────
+
+  ⚠ eslint(no-restricted-imports): 'blocked\uD800' import is restricted from being used by a pattern.
+   ╭─[no_restricted_imports.tsx:1:1]
+ 1 │ import("blocked\uD800");
+   · ───────────────────────
+   ╰────
+
+  ⚠ eslint(no-restricted-imports): 'blocked\uDC00' import is restricted from being used by a pattern.
+   ╭─[no_restricted_imports.tsx:1:1]
+ 1 │ import x = require("blocked\uDC00");
+   · ────────────────────────────────────
+   ╰────
+
+  ⚠ eslint(no-restricted-imports): 'blocked\uD800' import is restricted from being used by a pattern.
+   ╭─[no_restricted_imports.tsx:1:1]
+ 1 │ import "blocked\uD800";
+   · ───────────────────────
+   ╰────
+
+  ⚠ eslint(no-restricted-imports): 'blocked\uDC00' import is restricted from being used by a pattern.
+   ╭─[no_restricted_imports.tsx:1:1]
+ 1 │ import("blocked\uDC00");
+   · ───────────────────────
+   ╰────

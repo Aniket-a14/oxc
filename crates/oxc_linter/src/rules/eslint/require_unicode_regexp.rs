@@ -9,6 +9,7 @@ use oxc_ast::{
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_span::{GetSpan, Span};
+use oxc_str::JSStr;
 use oxc_syntax::operator::{AssignmentOperator, BinaryOperator};
 
 use crate::{
@@ -236,8 +237,11 @@ fn extract_regex_flags<'a>(
     resolve_flags(flags_arg, ctx, true, 0)
 }
 
-fn parse_flags(flags_text: &str) -> RegExpFlags {
-    flags_text.chars().filter_map(|ch| RegExpFlags::try_from(ch).ok()).collect()
+fn parse_flags(flags_text: JSStr<'_>) -> RegExpFlags {
+    flags_text
+        .chars()
+        .filter_map(|ch| ch.to_char().and_then(|ch| RegExpFlags::try_from(ch).ok()))
+        .collect()
 }
 
 const MAX_RESOLVE_DEPTH: usize = 8;
@@ -259,7 +263,7 @@ fn resolve_flags<'a>(
     }
 
     match expr {
-        Expression::StringLiteral(lit) => Some(parse_flags(lit.value.as_str())),
+        Expression::StringLiteral(lit) => Some(parse_flags(lit.value)),
         Expression::TemplateLiteral(template) => resolve_template_flags(template, ctx, next_depth),
         Expression::BooleanLiteral(lit) => {
             Some(if lit.value { RegExpFlags::U } else { RegExpFlags::empty() })
@@ -274,8 +278,11 @@ fn resolve_flags<'a>(
         Expression::ComputedMemberExpression(member) => {
             let object = resolve_static_string(&member.object, ctx)?;
             let index = resolve_static_index(&member.expression)?;
-            let ch = object.chars().nth(index)?;
-            Some(RegExpFlags::try_from(ch).unwrap_or_else(|_| RegExpFlags::empty()))
+            let unit = object.encode_utf16().nth(index)?;
+            let ch = char::from_u32(u32::from(unit));
+            Some(
+                ch.and_then(|ch| RegExpFlags::try_from(ch).ok()).unwrap_or_else(RegExpFlags::empty),
+            )
         }
         Expression::SequenceExpression(sequence) => {
             resolve_flags(sequence.expressions.last()?, ctx, true, next_depth)
@@ -297,22 +304,22 @@ fn resolve_template_flags<'a>(
     let mut flags = RegExpFlags::empty();
 
     for (index, expression) in template.expressions.iter().enumerate() {
-        flags |= parse_flags(template.quasis.get(index)?.value.cooked?.as_str());
+        flags |= parse_flags(template.quasis.get(index)?.value.cooked?);
         flags |= resolve_flags(expression, ctx, true, depth)?;
     }
 
-    flags |= parse_flags(template.quasis.last()?.value.cooked?.as_str());
+    flags |= parse_flags(template.quasis.last()?.value.cooked?);
     Some(flags)
 }
 
-fn resolve_static_string<'a>(expr: &'a Expression<'a>, ctx: &LintContext<'a>) -> Option<&'a str> {
+fn resolve_static_string<'a>(expr: &'a Expression<'a>, ctx: &LintContext<'a>) -> Option<JSStr<'a>> {
     match expr.get_inner_expression() {
-        Expression::StringLiteral(lit) => Some(lit.value.as_str()),
-        Expression::TemplateLiteral(template) => Some(template.single_quasi()?.as_str()),
+        Expression::StringLiteral(lit) => Some(lit.value),
+        Expression::TemplateLiteral(template) => template.single_quasi(),
         Expression::Identifier(ident) => {
             match resolve_const_initializer(ident, ctx)?.get_inner_expression() {
-                Expression::StringLiteral(lit) => Some(lit.value.as_str()),
-                Expression::TemplateLiteral(template) => Some(template.single_quasi()?.as_str()),
+                Expression::StringLiteral(lit) => Some(lit.value),
+                Expression::TemplateLiteral(template) => template.single_quasi(),
                 _ => None,
             }
         }
@@ -449,4 +456,12 @@ fn test() {
 
     Tester::new(RequireUnicodeRegexp::NAME, RequireUnicodeRegexp::PLUGIN, pass, fail)
         .test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr_consumers() {
+    use crate::{rule::RuleMeta, tester::Tester};
+    let pass = vec![r#"new RegExp("x", "\uD800u"[1]);"#, r#"new RegExp("x", "\uD800\uDC00u"[2]);"#];
+    let fail = vec![r#"new RegExp("x", "\uD800u"[0]);"#, r#"new RegExp("x", "u\uDC00"[1]);"#];
+    Tester::new(RequireUnicodeRegexp::NAME, RequireUnicodeRegexp::PLUGIN, pass, fail).test();
 }

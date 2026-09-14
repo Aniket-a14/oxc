@@ -114,7 +114,7 @@ impl Rule for MediaHasCaption {
             return;
         };
 
-        let element_name = get_element_type(ctx, jsx_el);
+        let Some(element_name) = get_element_type(ctx, jsx_el).into_utf8() else { return };
 
         let is_audio_or_video =
             self.0.audio.contains(&element_name) || self.0.video.contains(&element_name);
@@ -157,14 +157,19 @@ impl Rule for MediaHasCaption {
             JSXChild::Element(child_el) => {
                 let child_name = get_element_type(ctx, &child_el.opening_element);
 
-                self.0.track.contains(&child_name)
+                child_name
+                    .as_str()
+                    .is_some_and(|name| self.0.track.iter().any(|track| track == name))
                     && child_el.opening_element.attributes.iter().any(|attr| {
                         let JSXAttributeItem::Attribute(attr) = attr else { return false };
                         let JSXAttributeName::Identifier(iden) = &attr.name else {
                             return false;
                         };
                         if let Some(JSXAttributeValue::StringLiteral(s)) = &attr.value {
-                            return iden.name == "kind" && s.value.eq_ignore_ascii_case("captions");
+                            return iden.name == "kind"
+                                && s.value
+                                    .as_str()
+                                    .is_some_and(|value| value.eq_ignore_ascii_case("captions"));
                         }
                         false
                     })

@@ -118,7 +118,9 @@ fn populate_macro_tags(
 
             match &instr.value {
                 InstructionValue::Primitive { value: PrimitiveValue::String(s), .. } => {
-                    if let Some(macro_def) = macro_kinds.get(s.as_str()) {
+                    if let Some(name) = s.as_str()
+                        && let Some(macro_def) = macro_kinds.get(name)
+                    {
                         // We don't distinguish between tag names and strings, so record
                         // all `fbt` string literals in case they are used as a jsx tag.
                         macro_tags.insert(lvalue_id, macro_def.clone());
@@ -137,7 +139,10 @@ fn populate_macro_tags(
                 } => {
                     if let Some(macro_def) = macro_tags.get(&object.identifier).cloned() {
                         let property_macro = if let Some(ref props) = macro_def.properties {
-                            let prop_def = props.get(prop_name.as_str()).or_else(|| props.get("*"));
+                            let prop_def = prop_name
+                                .as_str()
+                                .and_then(|name| props.get(name))
+                                .or_else(|| props.get("*"));
                             match prop_def {
                                 Some(def) => def.clone(),
                                 None => macro_def.clone(),

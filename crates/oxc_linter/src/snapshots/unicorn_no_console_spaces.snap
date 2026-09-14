@@ -4,6 +4,34 @@ source: crates/oxc_linter/src/tester.rs
 
   ⚠ unicorn(no-console-spaces): Do not use trailing spaces with `console.log` parameters
    ╭─[no_console_spaces.tsx:1:14]
+ 1 │ console.log("\uD800 ", "x")
+   ·              ───────
+   ╰────
+  help: The `console.log()` method and similar methods join the parameters with a space so adding a leading/trailing space to a parameter, results in two spaces being added.
+
+  ⚠ unicorn(no-console-spaces): Do not use trailing spaces with `console.log` parameters
+   ╭─[no_console_spaces.tsx:1:14]
+ 1 │ console.log("\uDC00 ", "x")
+   ·              ───────
+   ╰────
+  help: The `console.log()` method and similar methods join the parameters with a space so adding a leading/trailing space to a parameter, results in two spaces being added.
+
+  ⚠ unicorn(no-console-spaces): Do not use trailing spaces with `console.log` parameters
+   ╭─[no_console_spaces.tsx:1:14]
+ 1 │ console.log("\uD800\uDC00 ", "x")
+   ·              ─────────────
+   ╰────
+  help: The `console.log()` method and similar methods join the parameters with a space so adding a leading/trailing space to a parameter, results in two spaces being added.
+
+  ⚠ unicorn(no-console-spaces): Do not use leading spaces with `console.log` parameters
+   ╭─[no_console_spaces.tsx:1:19]
+ 1 │ console.log("x", " \uD800")
+   ·                   ───────
+   ╰────
+  help: The `console.log()` method and similar methods join the parameters with a space so adding a leading/trailing space to a parameter, results in two spaces being added.
+
+  ⚠ unicorn(no-console-spaces): Do not use trailing spaces with `console.log` parameters
+   ╭─[no_console_spaces.tsx:1:14]
  1 │ console.log("abc ", "def");
    ·              ────
    ╰────

@@ -116,3 +116,22 @@ fn test() {
         .with_jest_plugin(true)
         .test_and_snapshot();
 }
+
+#[test]
+fn test_jsstr_matcher_chains() {
+    use crate::tester::Tester;
+    let mut pass = Vec::new();
+    let mut fail = Vec::new();
+    for name in ["custom", r"\uD800", r"\uD801", r"\uDC00", r"\uD800\uDC00", r"before\uD800after"] {
+        let source = format!(r#"expect(value).not["{name}"]();"#);
+        fail.push((source.clone(), Some(serde_json::json!([{ "not": null }]))));
+        pass.push((source, Some(serde_json::json!([{ "not.toBe": null }]))));
+    }
+    Tester::new(
+        NoRestrictedMatchers::NAME,
+        NoRestrictedMatchers::PLUGIN,
+        pass.iter().map(|(source, config)| (source.as_str(), config.clone())).collect(),
+        fail.iter().map(|(source, config)| (source.as_str(), config.clone())).collect(),
+    )
+    .test();
+}

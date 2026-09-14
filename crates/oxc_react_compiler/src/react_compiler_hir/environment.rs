@@ -10,7 +10,7 @@ use oxc_allocator::{Allocator, GetAllocator, Vec as ArenaVec};
 use oxc_diagnostics::{Diagnostics, OxcDiagnostic};
 use oxc_index::IndexVec;
 use oxc_span::Span;
-use oxc_str::{Ident, IdentHashMap, IdentHashSet, format_ident};
+use oxc_str::{Ident, IdentHashMap, IdentHashSet, JSStr, format_ident};
 use oxc_syntax::reference::ReferenceId;
 use oxc_syntax::symbol::SymbolId;
 
@@ -463,7 +463,7 @@ impl<'a> Environment<'a> {
                 if is_hook_name(name) { Ok(Some(self.get_custom_hook_type())) } else { Ok(None) }
             }
             NonLocalBinding::ImportSpecifier { name, module, imported } => {
-                if self.is_known_react_module(module) {
+                if module.as_str().is_some_and(|module| self.is_known_react_module(module)) {
                     if let Some(ty) = self.globals.get(imported) {
                         return Ok(Some(ty.clone()));
                     }
@@ -475,10 +475,14 @@ impl<'a> Environment<'a> {
 
                 // Try module type provider. We resolve first, then do property
                 // lookup on the cloned result to avoid double-borrow of self.
-                let module_type = self.resolve_module_type(module);
+                // Configured module names and the built-in provider are UTF-8.
+                // A nonmatching module remains an import and keeps hook-name analysis.
+                let module_type =
+                    module.as_str().and_then(|module| self.resolve_module_type(module));
 
                 // Check for module type validation errors (hook-name vs hook-type mismatches)
-                if let Some(errors) = self.module_type_errors.remove(module.as_str())
+                if let Some(errors) =
+                    module.as_str().and_then(|module| self.module_type_errors.remove(module))
                     && let Some(first_error) = errors.into_iter().next()
                 {
                     self.record_error(diagnostics::config_invalid_type_configuration_module(
@@ -504,7 +508,7 @@ impl<'a> Environment<'a> {
             | NonLocalBinding::ImportNamespace { name, module } => {
                 let is_default = matches!(binding, NonLocalBinding::ImportDefault { .. });
 
-                if self.is_known_react_module(module) {
+                if module.as_str().is_some_and(|module| self.is_known_react_module(module)) {
                     if let Some(ty) = self.globals.get(name) {
                         return Ok(Some(ty.clone()));
                     }
@@ -514,10 +518,14 @@ impl<'a> Environment<'a> {
                     return Ok(None);
                 }
 
-                let module_type = self.resolve_module_type(module);
+                // Configured module names and the built-in provider are UTF-8.
+                // A nonmatching module remains an import and keeps hook-name analysis.
+                let module_type =
+                    module.as_str().and_then(|module| self.resolve_module_type(module));
 
                 // Check for module type validation errors (hook-name vs hook-type mismatches)
-                if let Some(errors) = self.module_type_errors.remove(module.as_str())
+                if let Some(errors) =
+                    module.as_str().and_then(|module| self.module_type_errors.remove(module))
                     && let Some(first_error) = errors.into_iter().next()
                 {
                     self.record_error(diagnostics::config_invalid_type_configuration_module_2(
@@ -534,12 +542,12 @@ impl<'a> Environment<'a> {
                     };
                     if let Some(imported_type) = imported_type {
                         // Validate hook-name vs hook-type consistency for module name
-                        let expect_hook = is_hook_name(module);
+                        let expect_hook = is_hook_property_name(*module);
                         let is_hook =
                             self.get_hook_kind_for_type(&imported_type).ok().flatten().is_some();
                         if expect_hook != is_hook {
                             self.record_error(diagnostics::invalid_module_type(
-                                module.as_str(),
+                                &oxc_ast::StaticName::Borrowed(*module).to_string(),
                                 expect_hook,
                                 span,
                             ))?;
@@ -833,4 +841,17 @@ pub fn is_hook_name(name: &str) -> bool {
     }
     let fourth_char = name.as_bytes()[3];
     fourth_char.is_ascii_uppercase() || fourth_char.is_ascii_digit()
+}
+
+/// Check a JavaScript property name without discarding a surrogate elsewhere in it.
+pub fn is_hook_property_name(name: JSStr<'_>) -> bool {
+    if let Some(name) = name.as_str() {
+        return is_hook_name(name);
+    }
+    name.starts_with("use")
+        && name
+            .chars()
+            .nth(3)
+            .and_then(|ch| ch.to_char())
+            .is_some_and(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit())
 }

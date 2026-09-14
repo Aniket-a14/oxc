@@ -50,20 +50,24 @@ declare_oxc_lint!(
 );
 
 impl PreferTagOverRole {
-    fn check_roles<'a>(role_prop: &JSXAttributeItem<'a>, jsx_name: &str, ctx: &LintContext<'a>) {
+    fn check_roles<'a>(
+        role_prop: &JSXAttributeItem<'a>,
+        jsx_name: oxc_str::JSStr<'_>,
+        ctx: &LintContext<'a>,
+    ) {
         if let JSXAttributeItem::Attribute(attr) = role_prop
             && let Some(JSXAttributeValue::StringLiteral(role_values)) = &attr.value
         {
-            let roles = role_values.value.split_whitespace();
+            let roles = role_values.value.split_whitespace().filter_map(oxc_str::JSStr::as_str);
             for role in roles {
                 Self::check_role(role, jsx_name, attr.span, ctx);
             }
         }
     }
 
-    fn check_role(role: &str, jsx_name: &str, span: Span, ctx: &LintContext) {
+    fn check_role(role: &str, jsx_name: oxc_str::JSStr<'_>, span: Span, ctx: &LintContext) {
         let tags = get_tags_for_role(role);
-        if !tags.is_empty() && !tags.contains(&jsx_name) {
+        if !tags.is_empty() && !tags.iter().any(|tag| jsx_name == *tag) {
             let tag = tags.join(", ");
             ctx.diagnostic(prefer_tag_over_role_diagnostic(span, &tag, role));
         }
@@ -75,7 +79,7 @@ impl Rule for PreferTagOverRole {
         if let AstKind::JSXOpeningElement(jsx_el) = node.kind() {
             let name = get_element_type(ctx, jsx_el);
             if let Some(role_prop) = has_jsx_prop_ignore_case(jsx_el, "role") {
-                Self::check_roles(role_prop, &name, ctx);
+                Self::check_roles(role_prop, name.as_js_str(), ctx);
             }
         }
     }

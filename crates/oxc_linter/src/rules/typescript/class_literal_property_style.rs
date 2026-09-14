@@ -13,7 +13,7 @@ use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_semantic::ScopeFlags;
 use oxc_span::{GetSpan, Span};
-use oxc_str::Str;
+use oxc_str::JSStr;
 use rustc_hash::FxHashSet;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -195,7 +195,7 @@ fn check_fields_mode<'a>(class_body: &ClassBody<'a>, ctx: &LintContext<'a>) {
 }
 
 fn check_getters_mode<'a>(class_body: &ClassBody<'a>, ctx: &LintContext<'a>) {
-    let mut excluded_properties: FxHashSet<Str<'a>> = FxHashSet::default();
+    let mut excluded_properties: FxHashSet<JSStr<'a>> = FxHashSet::default();
     for element in &class_body.body {
         if let ClassElement::MethodDefinition(method) = element
             && method.kind == MethodDefinitionKind::Constructor
@@ -211,8 +211,8 @@ fn check_getters_mode<'a>(class_body: &ClassBody<'a>, ctx: &LintContext<'a>) {
         if let ClassElement::PropertyDefinition(property) = element
             && let Some(value) = literal_readonly_property_value(property)
         {
-            if let Some(name) = property.key.name().and_then(oxc_ast::StaticName::into_utf8)
-                && excluded_properties.contains(&*name)
+            if let Some(name) = property.key.name()
+                && excluded_properties.contains(&name.as_js_str())
             {
                 continue;
             }
@@ -330,26 +330,26 @@ fn property_keys_match(a: &PropertyKey<'_>, b: &PropertyKey<'_>) -> bool {
     }
 }
 
-fn assigned_this_property_name<'a>(left: &AssignmentTarget<'a>) -> Option<Str<'a>> {
+fn assigned_this_property_name<'a>(left: &AssignmentTarget<'a>) -> Option<JSStr<'a>> {
     let is_this_object =
         |expr: &Expression<'_>| matches!(expr.without_parentheses(), Expression::ThisExpression(_));
 
     match left {
         AssignmentTarget::StaticMemberExpression(expr) if is_this_object(&expr.object) => {
-            Some(expr.property.name.as_arena_str())
+            Some(expr.property.name.into())
         }
         AssignmentTarget::ComputedMemberExpression(expr) if is_this_object(&expr.object) => {
             expr.static_property_name()
         }
         AssignmentTarget::PrivateFieldExpression(expr) if is_this_object(&expr.object) => {
-            Some(expr.field.name.as_arena_str())
+            Some(expr.field.name.into())
         }
         _ => None,
     }
 }
 
 struct ConstructorAssignmentCollector<'set, 'a> {
-    excluded_properties: &'set mut FxHashSet<Str<'a>>,
+    excluded_properties: &'set mut FxHashSet<JSStr<'a>>,
 }
 
 impl<'a> VisitJs<'a> for ConstructorAssignmentCollector<'_, 'a> {

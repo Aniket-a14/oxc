@@ -1,0 +1,17 @@
+---
+source: crates/oxc_linter/src/tester.rs
+---
+
+  ⚠ eslint(accessor-pairs): Setter is defined without a getter
+   ╭─[accessor_pairs.tsx:1:35]
+ 1 │ const o = {get "\uD800"() {}, set "\uD801"(v) {}};
+   ·                                   ────────
+   ╰────
+  help: Define a getter for this property
+
+  ⚠ eslint(accessor-pairs): Setter is defined without a getter
+   ╭─[accessor_pairs.tsx:1:16]
+ 1 │ const o = {set "\uDC00"(v) {}};
+   ·                ────────
+   ╰────
+  help: Define a getter for this property

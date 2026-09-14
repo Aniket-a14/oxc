@@ -1,7 +1,9 @@
 use oxc_allocator::Allocator;
 use oxc_ast::{ast::*, builder::AstBuilder};
 use oxc_codegen::{Codegen, CodegenOptions, IndentChar};
-use oxc_span::SPAN;
+use oxc_parser::Parser;
+use oxc_span::{SPAN, SourceType};
+use oxc_str::JSStrBuilder;
 
 use crate::tester::{
     test, test_minify, test_minify_same, test_options, test_same, test_same_ignore_parse_errors,
@@ -981,6 +983,15 @@ fn string() {
 }
 
 #[test]
+fn wtf8_string_escaping() {
+    test(
+        r#"let x = "\uD800\"\x001\0a\b\v\f\n\r\x1B\\\u00A0\u2028\u2029</script>";"#,
+        "let x = \"\\ud800\\\"\\x001\\0a\\b\\v\\f\\n\\r\\x1B\\\\\\xA0\\u2028\\u2029<\\/script>\";\n",
+    );
+    test_minify(r#"let x = "\uD800${}\n";"#, "let x=`\\ud800\\${}\n`;");
+}
+
+#[test]
 fn print_string() {
     fn print(value: &str, options: CodegenOptions) -> String {
         let mut codegen = Codegen::new().with_options(options);
@@ -1073,7 +1084,7 @@ fn template_literal_escape_when_building_ast() {
     let cooked = "hello`world${foo}\\bar";
     let value = TemplateElementValue {
         raw: Str::from_str_in(cooked, &ast),
-        cooked: Some(Str::from_str_in(cooked, &ast)),
+        cooked: Some(Str::from_str_in(cooked, &ast).into()),
     };
     let element = TemplateElement::new_escape_raw(SPAN, value, true, &ast);
     let template_literal = TemplateLiteral::new(SPAN, [element], [], &ast);
@@ -1132,4 +1143,66 @@ fn html_comments() {
         "const x = 1;\n--> comment\nconst y = 2;\n",
         "const x = 1;\n--> comment\nconst y = 2;\n",
     );
+}
+
+#[test]
+fn test_jsx_attribute_lone_surrogates() {
+    let cases: &[(&str, &[u16], &str, &str)] = &[
+        ("", &[0xD800], "", r#""&#xD800;""#),
+        ("", &[0xDC00], "", r#""&#xDC00;""#),
+        ("", &[0xDBFF], "", r#""&#xDBFF;""#),
+        ("", &[0xDFFF], "", r#""&#xDFFF;""#),
+        ("before π", &[0xDABC], "😀 after", r#""before π&#xDABC;😀 after""#),
+        ("&amp;", &[0xD800], "&quot;", r#""&amp;&#xD800;&quot;""#),
+        ("\"", &[0xD800], "\"", r#"'"&#xD800;"'"#),
+        ("'", &[0xD800], "'", r#""'&#xD800;'""#),
+        ("\"'", &[0xD800], "'\"", r#"'"&apos;&#xD800;&apos;"'"#),
+        ("", &[0xDC00, 0xD800], "", r#""&#xDC00;&#xD800;""#),
+        ("\\uD800", &[0xD800], "\n", "\"\\uD800&#xD800;\n\""),
+    ];
+
+    for &(prefix, units, suffix, expected_attribute) in cases {
+        let allocator = Allocator::default();
+        let mut parsed = Parser::new(&allocator, r#"<X value="" />;"#, SourceType::jsx()).parse();
+        assert!(parsed.diagnostics.is_empty());
+        let Statement::ExpressionStatement(stmt) = &mut parsed.program.body[0] else { panic!() };
+        let Expression::JSXElement(element) = &mut stmt.expression else { panic!() };
+        let JSXAttributeItem::Attribute(attribute) = &mut element.opening_element.attributes[0]
+        else {
+            panic!()
+        };
+        let Some(JSXAttributeValue::StringLiteral(literal)) = &mut attribute.value else {
+            panic!()
+        };
+
+        // Backslash escapes are literal text in quoted JSX attributes, so construct the actual
+        // surrogate code units in the AST instead of spelling `\uD800` in JSX source.
+        let mut value = JSStrBuilder::new_in(&allocator);
+        value.push_str(prefix);
+        value.push_utf16(units);
+        value.push_str(suffix);
+        literal.value = value.into_js_str();
+        literal.raw = None;
+        assert!(literal.value.as_str().is_none());
+
+        for minify in [false, true] {
+            for single_quote in [false, true] {
+                let options = CodegenOptions { minify, single_quote, ..CodegenOptions::default() };
+                let code = Codegen::new().with_options(options.clone()).build(&parsed.program).code;
+                let expected = if minify {
+                    format!("<X value={expected_attribute}/>;")
+                } else {
+                    format!("<X value={expected_attribute} />;\n")
+                };
+                assert_eq!(code, expected);
+
+                let reparsed = Parser::new(&allocator, &code, SourceType::jsx()).parse();
+                assert!(reparsed.diagnostics.is_empty(), "{:?}", reparsed.diagnostics);
+                assert_eq!(
+                    Codegen::new().with_options(options).build(&reparsed.program).code,
+                    code
+                );
+            }
+        }
+    }
 }

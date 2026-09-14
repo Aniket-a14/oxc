@@ -5,7 +5,8 @@ use crate::{
     context::LintContext,
     fixer::{RuleFix, RuleFixer},
     utils::{
-        JestFnKind, JestGeneralFnKind, PossibleJestNode, get_node_name, parse_general_jest_fn_call,
+        JestFnKind, JestGeneralFnKind, PossibleJestNode, get_node_name, node_name_matches,
+        parse_general_jest_fn_call,
     },
 };
 use oxc_ast::{
@@ -189,7 +190,7 @@ pub fn resolve_expect_local_name(ctx: &LintContext<'_>, sources: &[&str]) -> Com
         }
 
         let source = entry.module_request.name();
-        if !sources.contains(&source) {
+        if !sources.iter().any(|&name| source == name) {
             continue;
         }
 
@@ -385,7 +386,7 @@ pub trait PreferExpectAssertionsRuleImpl {
             return false;
         };
 
-        let name = get_node_name(&first_call.callee);
+        let name = get_node_name(&first_call.callee, ctx.allocator());
 
         if name.ends_with("hasAssertions") {
             validate_has_assertions_args(first_call, prefix, ctx);
@@ -497,7 +498,7 @@ impl HookScanner {
 
 impl<'a> VisitJs<'a> for HookScanner {
     fn visit_call_expression(&mut self, call_expr: &CallExpression<'a>) {
-        if get_node_name(&call_expr.callee) == self.expected_name.as_str() {
+        if node_name_matches(&call_expr.callee, self.expected_name.as_str(), false) {
             self.has_expect_has_assertions = true;
             if !call_expr.arguments.is_empty() {
                 self.has_assertions_invalid_args_span = call_expr.arguments_span();
@@ -550,8 +551,8 @@ impl BodyScanner {
     }
 
     fn is_expect_call(&self, call_expr: &CallExpression<'_>) -> bool {
-        let name = get_node_name(&call_expr.callee);
-        name == self.prefix.as_str() || name.starts_with(self.prefix_dot.as_str())
+        node_name_matches(&call_expr.callee, self.prefix.as_str(), false)
+            || node_name_matches(&call_expr.callee, self.prefix_dot.as_str(), true)
     }
 }
 

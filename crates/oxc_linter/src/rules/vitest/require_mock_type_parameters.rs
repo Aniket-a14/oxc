@@ -161,7 +161,7 @@ impl RequireMockTypeParameters {
             return;
         }
 
-        let method_name = if let Some(method) = member.name() {
+        let method_name = if let Some(method) = member.name().and_then(oxc_str::JSStr::as_str) {
             CompactStr::from(method)
         } else {
             CompactStr::new("fn")

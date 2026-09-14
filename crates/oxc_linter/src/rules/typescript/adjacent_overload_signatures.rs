@@ -765,3 +765,20 @@ fn test() {
     Tester::new(AdjacentOverloadSignatures::NAME, AdjacentOverloadSignatures::PLUGIN, pass, fail)
         .test_and_snapshot();
 }
+
+#[test]
+fn test_jsstr() {
+    use crate::tester::Tester;
+    let pass = vec![
+        r#"interface I { "\uD800"(): void; "\ud800"(x: number): void; "\uDC00"(): void; }"#,
+        r#"interface I { "\uD800"(): void; normal(): void; "\uD801"(): void; }"#,
+    ];
+    let fail = vec![
+        r#"interface I { "\uD800"(): void; normal(): void; "\ud800"(x: number): void; }"#,
+        r#"interface I { "\uDC00"(): void; normal(): void; "\udc00"(x: number): void; }"#,
+    ];
+    Tester::new(AdjacentOverloadSignatures::NAME, AdjacentOverloadSignatures::PLUGIN, pass, fail)
+        .with_snapshot_suffix("jsstr")
+        .intentionally_allow_no_fix_tests()
+        .test_and_snapshot();
+}

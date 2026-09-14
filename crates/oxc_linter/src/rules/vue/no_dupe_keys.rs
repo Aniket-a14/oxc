@@ -133,7 +133,7 @@ fn check_define_props<'a>(node: &AstNode<'a>, call: &'a CallExpression<'a>, ctx:
         return;
     }
     if !matches!(call.callee, Expression::Identifier(_))
-        || call.callee_name() != Some("defineProps")
+        || call.callee_name().and_then(oxc_str::JSStr::as_str) != Some("defineProps")
     {
         return;
     }
@@ -319,10 +319,8 @@ fn report_or_add<'a>(
 /// Non-string literals are stringified like JS `String(value)`; `null` has no name.
 fn literal_element_name<'a>(expr: &Expression<'a>) -> Option<StaticName<'a>> {
     match expr {
-        Expression::StringLiteral(s) => Some(StaticName::from(s.value.as_str())),
-        Expression::TemplateLiteral(t) => {
-            t.single_quasi().map(|name| StaticName::from(name.as_str()))
-        }
+        Expression::StringLiteral(s) => Some(StaticName::Borrowed(s.value)),
+        Expression::TemplateLiteral(t) => t.single_quasi().map(StaticName::Borrowed),
         Expression::NumericLiteral(n) => Some(StaticName::Owned(n.value.to_js_string())),
         Expression::BooleanLiteral(b) => {
             Some(StaticName::from(if b.value { "true" } else { "false" }))
@@ -478,7 +476,7 @@ fn is_define_props_initializer<'a>(init: &'a Expression<'a>, call: &'a CallExpre
         Expression::CallExpression(c) => {
             std::ptr::eq(c.as_ref(), call)
                 || (matches!(c.callee, Expression::Identifier(_))
-                    && c.callee_name() == Some("withDefaults")
+                    && c.callee_name().and_then(oxc_str::JSStr::as_str) == Some("withDefaults")
                     && c.arguments
                         .first()
                         .and_then(|a| a.as_expression())
@@ -1913,4 +1911,18 @@ export default { props: { [true]: String }, data () { return { 'true': 1 } } }
     ];
 
     Tester::new(NoDupeKeys::NAME, NoDupeKeys::PLUGIN, pass, fail).test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr() {
+    use crate::tester::Tester;
+    let pass = vec![r#"defineComponent({ data() { return {"\uD800": 1, "\uD801": 2}; } });"#];
+    let fail = vec![
+        r#"defineComponent({ props: ["\uD800"], data() { return {"\ud800": 1}; } });"#,
+        r#"defineComponent({ props: ["\uDC00"], methods: {"\udc00"() {}} });"#,
+    ];
+    Tester::new(NoDupeKeys::NAME, NoDupeKeys::PLUGIN, pass, fail)
+        .with_snapshot_suffix("jsstr")
+        .intentionally_allow_no_fix_tests()
+        .test_and_snapshot();
 }

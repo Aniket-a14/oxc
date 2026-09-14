@@ -59,7 +59,7 @@ impl<'a> From<JSStr<'a>> for StaticName<'a> {
 
 impl<'a> From<oxc_str::Ident<'a>> for StaticName<'a> {
     fn from(name: oxc_str::Ident<'a>) -> Self {
-        Self::Borrowed(JSStr::from(name.as_str()))
+        Self::Borrowed(name.into())
     }
 }
 

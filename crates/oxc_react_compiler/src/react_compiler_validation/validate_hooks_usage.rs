@@ -16,7 +16,7 @@ use oxc_diagnostics::OxcDiagnostic;
 
 use crate::diagnostics;
 use crate::react_compiler_hir::dominator::compute_unconditional_blocks;
-use crate::react_compiler_hir::environment::{Environment, is_hook_name};
+use crate::react_compiler_hir::environment::{Environment, is_hook_name, is_hook_property_name};
 use crate::react_compiler_hir::object_shape::HookKind;
 use crate::react_compiler_hir::visitors::{each_pattern_operand, each_terminal_operand};
 use crate::react_compiler_hir::{
@@ -269,7 +269,7 @@ pub fn validate_hooks_usage(
                 InstructionValue::PropertyLoad { object, property, .. } => {
                     let object_kind = get_kind_for_place(object, &value_kinds, &env.identifiers);
                     let is_hook_property = match property {
-                        PropertyLiteral::String(s) => is_hook_name(s),
+                        PropertyLiteral::String(s) => is_hook_property_name(*s),
                         PropertyLiteral::Number(_) => false,
                     };
                     let kind = match object_kind {

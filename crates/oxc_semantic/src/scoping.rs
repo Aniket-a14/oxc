@@ -1,4 +1,4 @@
-use std::{collections::hash_map::Entry, fmt, mem};
+use std::{collections::hash_map::Entry, fmt, hash::BuildHasher, mem};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use self_cell::self_cell;
@@ -6,7 +6,7 @@ use self_cell::self_cell;
 use oxc_allocator::{Allocator, ArenaVec, BitSet, CloneIn, CloneInSemanticIds};
 use oxc_index::IndexVec;
 use oxc_span::Span;
-use oxc_str::{ArenaIdentHashMap, Ident};
+use oxc_str::{ArenaIdentHashMap, Ident, JSStr};
 use oxc_syntax::constant_value::ConstantValue;
 use oxc_syntax::{
     node::NodeId,
@@ -130,6 +130,7 @@ impl Default for Scoping {
                 symbol_redeclarations: FxHashMap::default(),
                 bindings: IndexVec::new(),
                 root_unresolved_references: UnresolvedReferences::new_in(allocator),
+                unbound_enum_member_values: hashbrown::HashTable::new(),
             }),
         }
     }
@@ -296,6 +297,9 @@ pub struct ScopingInner<'cell> {
     pub(crate) bindings: IndexVec<ScopeId, Bindings<'cell>>,
 
     pub(crate) root_unresolved_references: UnresolvedReferences<'cell>,
+    /// Enum property names containing lone surrogates cannot have lexical bindings.
+    /// Keep their complete names in this cell's arena, independently of the AST arena.
+    unbound_enum_member_values: hashbrown::HashTable<((ScopeId, JSStr<'cell>), ConstantValue)>,
 }
 
 // Symbol Table Methods
@@ -712,9 +716,52 @@ impl Scoping {
         self.enum_data.get_member_value(symbol_id)
     }
 
-    /// Set a computed constant value for an enum member symbol.
-    pub(crate) fn set_enum_member_value(&mut self, symbol_id: SymbolId, value: ConstantValue) {
-        self.enum_data.set_member_value(symbol_id, value);
+    /// Get a computed enum member value by body scope and JavaScript property name.
+    /// Includes string names containing lone surrogates, which have no lexical binding.
+    pub fn get_enum_member_value_by_name(
+        &self,
+        scope_id: ScopeId,
+        name: JSStr<'_>,
+    ) -> Option<&ConstantValue> {
+        if let Some(name) = name.as_str() {
+            self.get_binding(scope_id, name.into()).and_then(|id| self.get_enum_member_value(id))
+        } else {
+            let key = (scope_id, name);
+            self.cell
+                .borrow_dependent()
+                .unbound_enum_member_values
+                .find(rustc_hash::FxBuildHasher.hash_one(key), |(stored, _)| *stored == key)
+                .map(|(_, value)| value)
+        }
+    }
+
+    /// Set a computed constant value for an enum member.
+    pub(crate) fn set_enum_member_value_by_name(
+        &mut self,
+        scope_id: ScopeId,
+        name: JSStr<'_>,
+        value: ConstantValue,
+    ) {
+        if let Some(name) = name.as_str() {
+            if let Some(symbol_id) = self.get_binding(scope_id, name.into()) {
+                self.enum_data.set_member_value(symbol_id, value);
+            }
+        } else {
+            self.cell.with_dependent_mut(|allocator, cell| {
+                let key = (scope_id, name);
+                let entry = cell.unbound_enum_member_values.entry(
+                    rustc_hash::FxBuildHasher.hash_one(key),
+                    |(stored, _)| *stored == key,
+                    |(stored, _)| rustc_hash::FxBuildHasher.hash_one(stored),
+                );
+                match entry {
+                    hashbrown::hash_table::Entry::Occupied(mut entry) => entry.get_mut().1 = value,
+                    hashbrown::hash_table::Entry::Vacant(entry) => {
+                        entry.insert(((scope_id, name.clone_in(allocator)), value));
+                    }
+                }
+            });
+        }
     }
 
     /// Get the body scopes for an enum declaration symbol.
@@ -1141,6 +1188,20 @@ impl Scoping {
                     root_unresolved_references: cell
                         .root_unresolved_references
                         .clone_in_with_semantic_ids(allocator),
+                    unbound_enum_member_values: {
+                        let mut values = hashbrown::HashTable::with_capacity(
+                            cell.unbound_enum_member_values.len(),
+                        );
+                        for ((scope, name), value) in &cell.unbound_enum_member_values {
+                            let key = (*scope, name.clone_in(allocator));
+                            values.insert_unique(
+                                rustc_hash::FxBuildHasher.hash_one(key),
+                                (key, value.clone()),
+                                |(key, _)| rustc_hash::FxBuildHasher.hash_one(key),
+                            );
+                        }
+                        values
+                    },
                 })
             },
         }

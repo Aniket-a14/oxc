@@ -12,16 +12,20 @@ use crate::{
     context::LintContext,
     rule::DefaultRuleConfig,
     utils::{
-        JestFnKind, KnownMemberExpressionProperty, PossibleJestNode, is_type_of_jest_fn_call,
-        object_with_nullable_string_schema, parse_expect_jest_fn_call,
+        JestFnKind, PossibleJestNode, is_type_of_jest_fn_call, object_with_nullable_string_schema,
+        parse_expect_jest_fn_call,
     },
 };
 
-fn restricted_chain(chain_call: &str, span: Span) -> OxcDiagnostic {
+fn restricted_chain(chain_call: impl std::fmt::Display, span: Span) -> OxcDiagnostic {
     OxcDiagnostic::warn(format!("Use of `{chain_call}` is disallowed")).with_label(span)
 }
 
-fn restricted_chain_with_message(chain_call: &str, message: &str, span: Span) -> OxcDiagnostic {
+fn restricted_chain_with_message(
+    chain_call: impl std::fmt::Display,
+    message: &str,
+    span: Span,
+) -> OxcDiagnostic {
     OxcDiagnostic::warn(format!("Use of `{chain_call}` is disallowed"))
         .with_help(message.to_string())
         .with_label(span)
@@ -126,26 +130,35 @@ impl NoRestrictedMatchersConfig {
             return;
         }
 
-        let chain_call = members
-            .iter()
-            .filter_map(KnownMemberExpressionProperty::name)
-            .collect::<Vec<_>>()
-            .join(".");
+        let mut chain = oxc_str::JSStrBuilder::new_in(ctx.allocator());
+        for (index, member) in members.iter().enumerate() {
+            // A dynamic segment is unknown; never remove it from the chain.
+            let Some(name) = member.name() else { return };
+            if index != 0 {
+                chain.push('.');
+            }
+            chain.push_js_str(name);
+        }
+        let chain_call = chain.into_js_str();
 
         let span = Span::new(members.first().unwrap().span.start, members.last().unwrap().span.end);
 
         for (restriction, message) in &self.restricted_matchers {
-            if Self::check_restriction(chain_call.as_str(), restriction.as_str()) {
+            if Self::check_restriction(chain_call, restriction.as_str()) {
                 if let Some(message) = message {
-                    ctx.diagnostic(restricted_chain_with_message(&chain_call, message, span));
+                    ctx.diagnostic(restricted_chain_with_message(
+                        oxc_ast::StaticName::from(chain_call),
+                        message,
+                        span,
+                    ));
                 } else {
-                    ctx.diagnostic(restricted_chain(&chain_call, span));
+                    ctx.diagnostic(restricted_chain(oxc_ast::StaticName::from(chain_call), span));
                 }
             }
         }
     }
 
-    fn check_restriction(chain_call: &str, restriction: &str) -> bool {
+    fn check_restriction(chain_call: oxc_str::JSStr<'_>, restriction: &str) -> bool {
         if MODIFIER_NAME.contains(&restriction)
             || Path::new(restriction).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("not"))
         {

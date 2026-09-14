@@ -97,7 +97,7 @@ impl Rule for NoUnassignedImport {
                 if import_decl.specifiers.is_some() {
                     return;
                 }
-                if !self.is_match_allow_globs(import_decl.source.value.as_str()) {
+                if !self.is_match_allow_globs(import_decl.source.value) {
                     ctx.diagnostic(no_unassigned_import_diagnostic(
                         import_decl.span,
                         "Imported module should be assigned",
@@ -115,7 +115,7 @@ impl Rule for NoUnassignedImport {
                 let Argument::StringLiteral(source_str) = first_arg else {
                     return;
                 };
-                if !self.is_match_allow_globs(source_str.value.as_str()) {
+                if !self.is_match_allow_globs(source_str.value) {
                     ctx.diagnostic(no_unassigned_import_diagnostic(
                         call_expr.span,
                         "A `require()` style import is forbidden.",
@@ -128,8 +128,8 @@ impl Rule for NoUnassignedImport {
 }
 
 impl NoUnassignedImportConfig {
-    fn is_match_allow_globs(&self, source: &str) -> bool {
-        self.globs.iter().any(|glob| fast_glob::glob_match(glob.as_str(), source))
+    fn is_match_allow_globs(&self, source: oxc_str::JSStr) -> bool {
+        self.globs.iter().any(|glob| fast_glob::glob_match(glob.as_bytes(), source.as_wtf8()))
     }
 }
 
@@ -175,4 +175,18 @@ fn test() {
         .change_rule_path("no-unassigned-import.js")
         .with_import_plugin(true)
         .test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr_consumers() {
+    use crate::{rule::RuleMeta, tester::Tester};
+    let pass = vec![
+        (r#"import "./x\uD800.css";"#, Some(serde_json::json!([{"allow":["**/*.css"]}]))),
+        (r#"import x from "./x\uDC00.css";"#, None),
+    ];
+    let fail = vec![
+        (r#"import "./x\uD800.js";"#, Some(serde_json::json!([{"allow":["**/*.css"]}]))),
+        (r#"import "./x\uDC00.css";"#, None),
+    ];
+    Tester::new(NoUnassignedImport::NAME, NoUnassignedImport::PLUGIN, pass, fail).test();
 }

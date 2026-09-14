@@ -10,8 +10,8 @@ use crate::{
 
 fn no_named_as_default_diagnostic(
     span: Span,
-    module_name: &str,
-    export_name: &str,
+    module_name: impl std::fmt::Debug,
+    export_name: impl std::fmt::Debug,
 ) -> OxcDiagnostic {
     OxcDiagnostic::warn(format!("Module {export_name:?} has named export {module_name:?}"))
         .with_help(format!("Using default import as {module_name:?} can be confusing. Use another name for default import to avoid confusion."))

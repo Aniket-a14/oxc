@@ -9,7 +9,7 @@ use oxc_ast::{
 use oxc_ast_visit::{VisitJs, walk_js};
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_span::{GetSpan, Span};
-use oxc_str::CompactStr;
+use oxc_str::JSStr;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
@@ -117,7 +117,7 @@ pub fn run<'a>(possible_jest_node: &PossibleJestNode<'a, '_>, ctx: &LintContext<
         return;
     };
 
-    let mut pending_promises: FxHashMap<CompactStr, Span> = FxHashMap::default();
+    let mut pending_promises: FxHashMap<JSStr<'_>, Span> = FxHashMap::default();
     let mut return_found = false;
 
     process_statements(&callback_body.statements, &mut pending_promises, &mut return_found, ctx);
@@ -129,7 +129,7 @@ pub fn run<'a>(possible_jest_node: &PossibleJestNode<'a, '_>, ctx: &LintContext<
 
 fn process_statements<'a>(
     statements: &'a ArenaVec<'a, Statement<'a>>,
-    pending_promises: &mut FxHashMap<CompactStr, Span>,
+    pending_promises: &mut FxHashMap<JSStr<'a>, Span>,
     return_found: &mut bool,
     ctx: &LintContext<'a>,
 ) {
@@ -168,8 +168,7 @@ fn process_statements<'a>(
                     let mut init_scanner = PromiseExpectScanner::new();
                     init_scanner.visit_expression(init);
                     if init_scanner.found_expect_in_promise {
-                        pending_promises
-                            .insert(CompactStr::from(ident.name.as_str()), declarator.span);
+                        pending_promises.insert(ident.name.into(), declarator.span);
                     }
                 }
             }
@@ -181,13 +180,12 @@ fn process_statements<'a>(
                         .and_then(SimpleAssignmentTarget::get_identifier_name)
                     {
                         if !expression_contains_identifier(&assign_expr.right, name)
-                            && let Some(old_span) =
-                                pending_promises.remove(CompactStr::from(name).as_str())
+                            && let Some(old_span) = pending_promises.remove(&name)
                         {
                             ctx.diagnostic(expect_in_unhandled_promise(old_span));
                         }
                         if scanner.found_expect_in_promise {
-                            pending_promises.insert(CompactStr::from(name), expr_stmt.span);
+                            pending_promises.insert(name, expr_stmt.span);
                         }
                     } else if scanner.found_expect_in_promise {
                         ctx.diagnostic(expect_in_unhandled_promise(expr_stmt.span));
@@ -201,7 +199,7 @@ fn process_statements<'a>(
             Statement::ReturnStatement(return_stmt) => {
                 if let Some(name) = return_stmt.argument.as_ref().and_then(|arg| ident_name_of(arg))
                 {
-                    pending_promises.remove(name);
+                    pending_promises.remove(&name);
                 }
                 *return_found = true;
             }
@@ -213,24 +211,24 @@ fn process_statements<'a>(
     }
 }
 
-fn resolve_pending_promises(
-    pending_promises: &mut FxHashMap<CompactStr, Span>,
-    resolved_names: &FxHashSet<CompactStr>,
+fn resolve_pending_promises<'a>(
+    pending_promises: &mut FxHashMap<JSStr<'a>, Span>,
+    resolved_names: &FxHashSet<JSStr<'a>>,
 ) {
     for name in resolved_names {
-        pending_promises.remove(name.as_str());
+        pending_promises.remove(name);
     }
 }
 
-fn ident_name_of<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
-    if let Expression::Identifier(ident) = expr { Some(ident.name.as_str()) } else { None }
+fn ident_name_of<'a>(expr: &Expression<'a>) -> Option<JSStr<'a>> {
+    if let Expression::Identifier(ident) = expr { Some(ident.name.into()) } else { None }
 }
 
 /// Walks down the callee chain of `expect(x).resolves.not.toBe(2)` to find
 /// the arguments of the innermost `expect(...)` call.
-fn find_expect_args<'a>(
-    call_expr: &'a CallExpression<'a>,
-) -> Option<&'a ArenaVec<'a, Argument<'a>>> {
+fn find_expect_args<'a, 'b>(
+    call_expr: &'b CallExpression<'a>,
+) -> Option<&'b ArenaVec<'a, Argument<'a>>> {
     if let Expression::Identifier(ident) = &call_expr.callee
         && ident.name == "expect"
     {
@@ -239,7 +237,7 @@ fn find_expect_args<'a>(
     find_inner_expect(&call_expr.callee)
 }
 
-fn find_inner_expect<'a>(expr: &'a Expression<'a>) -> Option<&'a ArenaVec<'a, Argument<'a>>> {
+fn find_inner_expect<'a, 'b>(expr: &'b Expression<'a>) -> Option<&'b ArenaVec<'a, Argument<'a>>> {
     match expr {
         Expression::CallExpression(call) => find_expect_args(call),
         _ => find_inner_expect(expr.as_member_expression()?.object()),
@@ -248,20 +246,20 @@ fn find_inner_expect<'a>(expr: &'a Expression<'a>) -> Option<&'a ArenaVec<'a, Ar
 
 /// Returns `true` if the expression contains a reference to the given identifier name.
 /// Used to check if `somePromise = somePromise.then(...)` continues the same chain.
-fn expression_contains_identifier(expr: &Expression, name: &str) -> bool {
+fn expression_contains_identifier(expr: &Expression, name: JSStr<'_>) -> bool {
     let mut finder = IdentifierFinder { name, found: false };
     finder.visit_expression(expr);
     finder.found
 }
 
 struct IdentifierFinder<'b> {
-    name: &'b str,
+    name: JSStr<'b>,
     found: bool,
 }
 
 impl<'a> VisitJs<'a> for IdentifierFinder<'_> {
     fn visit_identifier_reference(&mut self, ident: &oxc_ast::ast::IdentifierReference<'a>) {
-        if ident.name == self.name {
+        if self.name == ident.name.as_str() {
             self.found = true;
         }
     }
@@ -306,7 +304,7 @@ fn get_checkable_callback_body<'a>(callback: &'a Argument<'a>) -> Option<&'a Fun
     }
 }
 
-struct PromiseExpectScanner {
+struct PromiseExpectScanner<'a> {
     /// Whether we are currently inside a promise chain callback.
     in_promise_chain: bool,
     /// Whether we are currently inside an `await` expression.
@@ -315,10 +313,10 @@ struct PromiseExpectScanner {
     /// that is NOT already inside an `await`.
     found_expect_in_promise: bool,
     /// Identifiers that were properly resolved (awaited, expect().resolves, etc.)
-    resolved_names: FxHashSet<CompactStr>,
+    resolved_names: FxHashSet<JSStr<'a>>,
 }
 
-impl PromiseExpectScanner {
+impl<'a> PromiseExpectScanner<'a> {
     fn new() -> Self {
         Self {
             in_promise_chain: false,
@@ -328,13 +326,13 @@ impl PromiseExpectScanner {
         }
     }
 
-    fn resolve_ident(&mut self, expr: &Expression) {
+    fn resolve_ident(&mut self, expr: &Expression<'a>) {
         if let Some(name) = ident_name_of(expr) {
-            self.resolved_names.insert(CompactStr::from(name));
+            self.resolved_names.insert(name);
         }
     }
 
-    fn collect_resolved_from_promise_wrapper(&mut self, call_expr: &CallExpression) {
+    fn collect_resolved_from_promise_wrapper(&mut self, call_expr: &CallExpression<'a>) {
         let Some(member) = call_expr.callee.as_member_expression() else { return };
         let Expression::Identifier(obj) = member.object() else { return };
         if obj.name != "Promise" {
@@ -343,7 +341,7 @@ impl PromiseExpectScanner {
 
         let first_arg = call_expr.arguments.first().and_then(|a| a.as_expression());
 
-        match member.static_property_name() {
+        match member.static_property_name().and_then(oxc_str::JSStr::as_str) {
             Some("all" | "allSettled" | "race" | "any") => {
                 if let Some(Expression::ArrayExpression(arr)) = first_arg {
                     for elem in &arr.elements {
@@ -368,10 +366,11 @@ fn is_promise_call_expression(call_expr: &CallExpression<'_>) -> bool {
         .callee
         .as_member_expression()
         .and_then(MemberExpression::static_property_name)
+        .and_then(oxc_str::JSStr::as_str)
         .is_some_and(|prop| matches!(prop, "then" | "catch" | "finally"))
 }
 
-impl<'a> VisitJs<'a> for PromiseExpectScanner {
+impl<'a> VisitJs<'a> for PromiseExpectScanner<'a> {
     fn visit_call_expression(&mut self, call_expr: &CallExpression<'a>) {
         // Check for `expect(promise).resolves/rejects` — resolves the promise variable
         let callee_name = get_node_name_vec(&call_expr.callee);

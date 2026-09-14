@@ -712,3 +712,24 @@ fn define_then_transform_optional_chain() {
         &c2,
     );
 }
+
+#[test]
+fn jsstr_destructuring_keys_preserve_identity() {
+    let config = ReplaceGlobalDefinesConfig::new(&[(
+        "process.env",
+        r#"{ normal: 1, "\uD800": 2, "\uD801": 3, "\uDC00": 4, "\uD800\uDC00": 5 }"#,
+    )])
+    .unwrap();
+    test_define_only(
+        "const { normal } = process.env;",
+        "const { normal } = { normal: 1 };",
+        &config,
+    );
+    // Walking a literal pattern key clears the existing optional pruning state.
+    // The replacement must still preserve every distinct property value.
+    test_define_only(
+        r#"const { normal, "\ud800": lead, "\udc00": trail, "𐀀": pair } = process.env;"#,
+        r#"const { normal, "\ud800": lead, "\udc00": trail, "𐀀": pair } = { normal: 1, "\uD800": 2, "\uD801": 3, "\uDC00": 4, "\uD800\uDC00": 5 };"#,
+        &config,
+    );
+}

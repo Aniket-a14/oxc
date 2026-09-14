@@ -5,6 +5,7 @@ use oxc_ast::{
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_span::Span;
+use oxc_str::JSStr;
 
 use crate::{AstNode, context::LintContext, rule::Rule};
 
@@ -146,10 +147,7 @@ impl Rule for NoHtmlLinkForPages {
         let is_internal_link = href_attr.value.as_ref().is_some_and(|value| {
             match value {
                 // String literal href - check if it's an internal link
-                JSXAttributeValue::StringLiteral(str_lit) => {
-                    let href_value = str_lit.value.as_str();
-                    is_internal_page_link(href_value)
-                }
+                JSXAttributeValue::StringLiteral(str_lit) => is_internal_page_link(str_lit.value),
                 // Expression href (dynamic) - ignore, can't statically determine if internal
                 _ => false,
             }
@@ -162,7 +160,7 @@ impl Rule for NoHtmlLinkForPages {
 }
 
 /// Determines if an href value represents an internal page link
-fn is_internal_page_link(href: &str) -> bool {
+fn is_internal_page_link(href: JSStr<'_>) -> bool {
     // Skip external links
     if href.starts_with("http://") || href.starts_with("https://") {
         return false;
@@ -183,7 +181,7 @@ fn is_internal_page_link(href: &str) -> bool {
     }
 
     // Skip hash links (same page)
-    if href.starts_with('#') {
+    if href.starts_with("#") {
         return false;
     }
 
@@ -193,36 +191,37 @@ fn is_internal_page_link(href: &str) -> bool {
     }
 
     // Internal links typically start with / or are relative paths
-    href.starts_with('/')
-        || (!href.split('/').next().unwrap_or("").contains(':') && !href.starts_with("//"))
+    href.starts_with("/")
+        || (!href.split_once("/").map_or(href, |(first, _)| first).contains(":")
+            && !href.starts_with("//"))
 }
 
 #[test]
 fn test_is_internal_page_link() {
     // Internal links
-    assert!(is_internal_page_link("/about"));
-    assert!(is_internal_page_link("/contact/us"));
-    assert!(is_internal_page_link("about"));
-    assert!(is_internal_page_link("../contact"));
-    assert!(is_internal_page_link("./about"));
+    assert!(is_internal_page_link("/about".into()));
+    assert!(is_internal_page_link("/contact/us".into()));
+    assert!(is_internal_page_link("about".into()));
+    assert!(is_internal_page_link("../contact".into()));
+    assert!(is_internal_page_link("./about".into()));
 
     // External links
-    assert!(!is_internal_page_link("https://example.com"));
-    assert!(!is_internal_page_link("http://example.com"));
-    assert!(!is_internal_page_link("mailto:test@example.com"));
-    assert!(!is_internal_page_link("tel:+1234567890"));
-    assert!(!is_internal_page_link("ftp://example.com"));
-    assert!(!is_internal_page_link("file://path/to/file"));
+    assert!(!is_internal_page_link("https://example.com".into()));
+    assert!(!is_internal_page_link("http://example.com".into()));
+    assert!(!is_internal_page_link("mailto:test@example.com".into()));
+    assert!(!is_internal_page_link("tel:+1234567890".into()));
+    assert!(!is_internal_page_link("ftp://example.com".into()));
+    assert!(!is_internal_page_link("file://path/to/file".into()));
 
     // Hash links (same page)
-    assert!(!is_internal_page_link("#section"));
-    assert!(!is_internal_page_link("#"));
+    assert!(!is_internal_page_link("#section".into()));
+    assert!(!is_internal_page_link("#".into()));
 
     // Empty href
-    assert!(!is_internal_page_link(""));
+    assert!(!is_internal_page_link("".into()));
 
     // Protocol-relative URLs
-    assert!(!is_internal_page_link("//example.com"));
+    assert!(!is_internal_page_link("//example.com".into()));
 }
 
 #[test]

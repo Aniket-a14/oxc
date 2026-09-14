@@ -99,14 +99,14 @@ impl Rule for NoNamespace {
 
         module_record.import_entries.iter().for_each(|entry| match &entry.import_name {
             ImportImportName::NamespaceObject => {
-                let source = entry.module_request.name();
+                let source = entry.module_request.name().as_wtf8();
 
                 if self.ignore.is_empty()
                     || self.ignore.iter().all(|pattern| {
                         let target = if pattern.contains('/') {
                             source
                         } else {
-                            source.rsplit('/').next().unwrap_or(source)
+                            source.rsplit(|&byte| byte == b'/').next().unwrap_or(source)
                         };
                         !glob_match(pattern.as_str(), target)
                     })

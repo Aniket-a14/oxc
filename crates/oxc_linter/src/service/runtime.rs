@@ -1172,9 +1172,12 @@ impl Runtime {
                 .requested_modules
                 .keys()
                 .filter_map(|specifier| {
+                    // The filesystem resolver accepts UTF-8, while the syntax record
+                    // retains every JavaScript module specifier, including lone surrogates.
+                    let specifier = specifier.as_str()?;
                     let resolution = resolver.resolve_file(path, specifier).ok()?;
                     Some(ResolvedModuleRequest {
-                        specifier: specifier.clone(),
+                        specifier: CompactStr::from(specifier),
                         resolved_requested_path: Arc::<OsStr>::from(resolution.path().as_os_str()),
                     })
                 })

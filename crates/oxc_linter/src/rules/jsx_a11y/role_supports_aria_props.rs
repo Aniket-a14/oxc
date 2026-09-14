@@ -67,7 +67,12 @@ fn default(span: Span, attr_name: &str, role: &str) -> OxcDiagnostic {
     .with_label(span)
 }
 
-fn is_implicit_diagnostic(span: Span, attr_name: &str, role: &str, el_name: &str) -> OxcDiagnostic {
+fn is_implicit_diagnostic(
+    span: Span,
+    attr_name: &str,
+    role: &str,
+    el_name: impl std::fmt::Display,
+) -> OxcDiagnostic {
     OxcDiagnostic::warn(format!("The attribute `{attr_name}` is not supported by the role `{role}`. This role is implicit on the element `{el_name}`."))
         .with_help(format!("Try to remove invalid attribute `{attr_name}`."))
         .with_label(span)
@@ -83,8 +88,8 @@ impl Rule for RoleSupportsAriaProps {
 
         let role = has_jsx_prop_ignore_case(jsx_el, "role");
         let role_value = role.map_or_else(
-            || get_implicit_role(jsx_el, &el_type),
-            |i| get_string_literal_prop_value(i),
+            || el_type.as_str().and_then(|name| get_implicit_role(jsx_el, name)),
+            |i| get_string_literal_prop_value(i).and_then(oxc_str::JSStr::as_str),
         );
         let is_implicit = role_value.is_some() && role.is_none();
         if let Some(role_value) = role_value {
@@ -145,7 +150,7 @@ fn get_implicit_role<'a>(
                 .map_or("img", |v| if v.is_empty() { "" } else { "img" })
         }),
         "input" => has_jsx_prop_ignore_case(node, "type").map_or("textbox", |input_type| {
-            match get_string_literal_prop_value(input_type) {
+            match get_string_literal_prop_value(input_type).and_then(oxc_str::JSStr::as_str) {
                 Some("button" | "image" | "reset" | "submit") => "button",
                 Some("checkbox") => "checkbox",
                 Some("radio") => "radio",
@@ -159,7 +164,7 @@ fn get_implicit_role<'a>(
                 .map_or("", |v| if v == "toolbar" { "toolbar" } else { "" })
         }),
         "menuitem" => has_jsx_prop_ignore_case(node, "type").map_or("", |v| {
-            match get_string_literal_prop_value(v) {
+            match get_string_literal_prop_value(v).and_then(oxc_str::JSStr::as_str) {
                 Some("checkbox") => "menuitemcheckbox",
                 Some("command") => "menuitem",
                 Some("radio") => "menuitemradio",

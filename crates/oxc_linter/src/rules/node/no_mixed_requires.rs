@@ -236,17 +236,17 @@ fn infer_module_type(init: &Expression) -> ModuleType {
     };
 
     let Some(value) = arg.as_expression().and_then(|expr| match expr {
-        Expression::StringLiteral(lit) => Some(lit.value.as_str()),
+        Expression::StringLiteral(lit) => Some(lit.value),
         _ => None,
     }) else {
         return ModuleType::Computed;
     };
 
-    if BUILTIN_MODULES.contains(&value) {
+    if value.as_str().is_some_and(|value| BUILTIN_MODULES.contains(&value)) {
         return ModuleType::Core;
     }
 
-    if value.starts_with("./") || value.starts_with("../") || value.starts_with('/') {
+    if value.starts_with("./") || value.starts_with("../") || value.starts_with("/") {
         return ModuleType::File;
     }
 
@@ -365,4 +365,24 @@ fn test() {
     ];
 
     Tester::new(NoMixedRequires::NAME, NoMixedRequires::PLUGIN, pass, fail).test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr_consumers() {
+    use crate::{rule::RuleMeta, tester::Tester};
+    let pass = vec![
+        (
+            r#"var a = require("x\uD800"), b = require("y\uDC00");"#,
+            Some(serde_json::json!([{"grouping":true}])),
+        ),
+        (
+            r#"var a = require("./x\uD800"), b = require("./y");"#,
+            Some(serde_json::json!([{"grouping":true}])),
+        ),
+    ];
+    let fail = vec![(
+        r#"var a = require("x\uD800"), b = require("./y");"#,
+        Some(serde_json::json!([{"grouping":true}])),
+    )];
+    Tester::new(NoMixedRequires::NAME, NoMixedRequires::PLUGIN, pass, fail).test();
 }

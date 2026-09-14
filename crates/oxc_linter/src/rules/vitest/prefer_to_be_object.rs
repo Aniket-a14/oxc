@@ -28,7 +28,7 @@ fn is_parsed_instance_of_matcher_call(
     parsed_expect_call.args.len() == 1
         && matches!(
             parsed_expect_call.args.first(),
-            Some(Argument::Identifier(id)) if matcher.name().as_deref() == Some("toBeInstanceOf") && id.name == "Object"
+            Some(Argument::Identifier(id)) if matcher.name().and_then(oxc_str::JSStr::as_str) == Some("toBeInstanceOf") && id.name == "Object"
         )
 }
 
@@ -102,7 +102,10 @@ impl PreferToBeObject {
             return;
         }
 
-        if matches!(matcher.name().as_deref(), Some("toBeTruthy" | "toBeFalsy")) {
+        if matches!(
+            matcher.name().and_then(oxc_str::JSStr::as_str),
+            Some("toBeTruthy" | "toBeFalsy")
+        ) {
             let Some(Expression::CallExpression(parent_call_expr)) = parsed_expect_call.head.parent
             else {
                 return;
@@ -132,11 +135,12 @@ impl PreferToBeObject {
             if id.name == "Object" {
                 ctx.diagnostic_with_fix(prefer_to_be_object(matcher.span), |fixer| {
                     let code = {
-                        let not_modifier = parsed_expect_call
-                            .modifiers()
-                            .any(|node| node.name().as_deref() == Some("not"));
-                        let is_not_modifier =
-                            (matcher.name().as_deref() == Some("toBeFalsy")) != not_modifier;
+                        let not_modifier = parsed_expect_call.modifiers().any(|node| {
+                            node.name().and_then(oxc_str::JSStr::as_str) == Some("not")
+                        });
+                        let is_not_modifier = (matcher.name().and_then(oxc_str::JSStr::as_str)
+                            == Some("toBeFalsy"))
+                            != not_modifier;
 
                         let left = fixer.source_range(Span::new(
                             call_expr.span.start,

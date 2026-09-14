@@ -10,6 +10,7 @@ use oxc_ast::{
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_span::{GetSpan, Span};
+use oxc_str::JSStr;
 use serde::Deserialize;
 
 use crate::{
@@ -118,7 +119,7 @@ impl Rule for NoAbsolutePath {
     fn run<'a>(&self, node: &AstNode<'a>, ctx: &LintContext<'a>) {
         match node.kind() {
             AstKind::ImportDeclaration(import_decl)
-                if self.esmodule && check_path_is_absolute(import_decl.source.value.as_str()) =>
+                if self.esmodule && check_path_is_absolute(import_decl.source.value) =>
             {
                 ctx.diagnostic(no_absolute_path_diagnostic(import_decl.source.span));
             }
@@ -134,14 +135,14 @@ impl Rule for NoAbsolutePath {
                             if count == 1
                                 && func_name == "require"
                                 && self.commonjs
-                                && check_path_is_absolute(str_literal.value.as_str()) =>
+                                && check_path_is_absolute(str_literal.value) =>
                         {
                             ctx.diagnostic(no_absolute_path_diagnostic(str_literal.span));
                         }
                         Argument::ArrayExpression(arr_expr) if count == 2 && self.amd => {
                             for el in &arr_expr.elements {
                                 if let Some(el_expr) = el.as_expression()
-                                    && matches!(el_expr, Expression::StringLiteral(literal) if check_path_is_absolute(literal.value.as_str()))
+                                    && matches!(el_expr, Expression::StringLiteral(literal) if check_path_is_absolute(literal.value))
                                 {
                                     ctx.diagnostic(no_absolute_path_diagnostic(el_expr.span()));
                                 }
@@ -156,8 +157,27 @@ impl Rule for NoAbsolutePath {
     }
 }
 
-fn check_path_is_absolute(path_str: &str) -> bool {
-    Path::new(path_str).is_absolute()
+fn check_path_is_absolute(value: JSStr<'_>) -> bool {
+    if let Some(value) = value.as_str() {
+        return Path::new(value).is_absolute();
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        Path::new(std::ffi::OsStr::from_bytes(value.as_wtf8())).is_absolute()
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+        // Windows paths use UTF-16 and can contain unpaired surrogates.
+        let units: Vec<_> = value.encode_utf16().collect();
+        Path::new(&std::ffi::OsString::from_wide(&units)).is_absolute()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        // Non-Windows targets use the leading slash to identify absolute paths.
+        value.starts_with("/")
+    }
 }
 
 #[test]
@@ -229,4 +249,13 @@ fn test() {
         .change_rule_path("index.js")
         .with_import_plugin(true)
         .test_and_snapshot();
+}
+
+#[test]
+#[cfg(not(windows))]
+fn test_jsstr_consumers() {
+    use crate::{rule::RuleMeta, tester::Tester};
+    let pass = vec![r#"import "./x\uD800";"#, r#"require("x\uDC00");"#];
+    let fail = vec![r#"import "/x\uD800";"#, r#"require("/x\uDC00");"#];
+    Tester::new(NoAbsolutePath::NAME, NoAbsolutePath::PLUGIN, pass, fail).test();
 }

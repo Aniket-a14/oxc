@@ -318,7 +318,8 @@ pub fn is_vue_component_options_call(call_expr: &CallExpression<'_>) -> bool {
     let Some(member_expr) = call_expr.callee.get_member_expr() else {
         return false;
     };
-    let Some(prop_name) = member_expr.static_property_name() else {
+    let Some(prop_name) = member_expr.static_property_name().and_then(oxc_str::JSStr::as_str)
+    else {
         return false;
     };
 
@@ -523,7 +524,10 @@ pub fn is_vue_computed_call(call: &CallExpression<'_>, ctx: &LintContext<'_>) ->
         return false;
     };
     ctx.module_record().import_entries.iter().any(|entry| {
-        if !matches!(entry.module_request.name(), "vue" | "@vue/composition-api" | "#imports") {
+        if !matches!(
+            entry.module_request.name().as_str(),
+            Some("vue" | "@vue/composition-api" | "#imports")
+        ) {
             return false;
         }
         let ImportImportName::Name(name_span) = &entry.import_name else { return false };

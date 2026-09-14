@@ -2,15 +2,19 @@
 
 use std::{
     fmt,
+    hash::{Hash, Hasher},
     path::{Path, PathBuf},
     sync::{Arc, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak},
 };
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use oxc_allocator::{Allocator, CloneIn};
+use self_cell::self_cell;
+
 use oxc_semantic::Semantic;
 use oxc_span::Span;
-use oxc_str::CompactStr;
+use oxc_str::{CompactStr, JSStr};
 pub use oxc_syntax::module_record::RequestedModule;
 
 /// ESM Module Record
@@ -37,7 +41,8 @@ pub struct ModuleRecord {
     ///   import ModuleSpecifier
     ///   export ExportFromClause FromClause
     /// Keyed by ModuleSpecifier, valued by all node occurrences
-    pub requested_modules: FxHashMap<CompactStr, Vec<RequestedModule>>,
+    pub requested_modules:
+        hashbrown::HashMap<ModuleSpecifier, Vec<RequestedModule>, rustc_hash::FxBuildHasher>,
 
     /// `[[LoadedModules]]`
     ///
@@ -138,6 +143,142 @@ impl<'a> From<&oxc_syntax::module_record::NameSpan<'a>> for NameSpan {
     }
 }
 
+// Each module's specifiers share one arena. The frozen table owns the storage
+// independently of the parser arena without requiring a general owned JS string.
+self_cell! {
+    struct ModuleSpecifierStorage {
+        owner: Allocator,
+        #[covariant]
+        dependent: Specifiers,
+    }
+}
+type Specifiers<'a> = Vec<JSStr<'a>>;
+
+// SAFETY: The arena is used only during construction, before this table is shared.
+// No API exposes the owner or mutable access to the dependent strings. Readers
+// access only immutable JSStr values, which are Sync. self_cell keeps their arena
+// alive until the last owner is dropped.
+unsafe impl Sync for ModuleSpecifierStorage {}
+
+/// An owned module specifier retaining its exact JavaScript string value.
+#[derive(Clone)]
+pub struct ModuleSpecifier(ModuleSpecifierValue);
+
+#[derive(Clone)]
+enum ModuleSpecifierValue {
+    Utf8(CompactStr),
+    Wtf8 { storage: Arc<ModuleSpecifierStorage>, index: usize },
+}
+
+impl ModuleSpecifier {
+    pub fn as_js_str(&self) -> JSStr<'_> {
+        match &self.0 {
+            ModuleSpecifierValue::Utf8(name) => JSStr::from(name.as_str()),
+            ModuleSpecifierValue::Wtf8 { storage, index } => storage.borrow_dependent()[*index],
+        }
+    }
+
+    /// Borrow UTF-8 for a resolver or another explicitly UTF-8-only API.
+    pub fn as_str(&self) -> Option<&str> {
+        self.as_js_str().as_str()
+    }
+}
+
+impl PartialEq for ModuleSpecifier {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_js_str() == other.as_js_str()
+    }
+}
+impl Eq for ModuleSpecifier {}
+impl Hash for ModuleSpecifier {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_js_str().hash(state);
+    }
+}
+impl hashbrown::Equivalent<ModuleSpecifier> for JSStr<'_> {
+    fn equivalent(&self, other: &ModuleSpecifier) -> bool {
+        *self == other.as_js_str()
+    }
+}
+impl fmt::Debug for ModuleSpecifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.as_js_str().fmt(f)
+    }
+}
+impl fmt::Display for ModuleSpecifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        oxc_ast::StaticName::Borrowed(self.as_js_str()).fmt(f)
+    }
+}
+impl<'a> From<&'a ModuleSpecifier> for JSStr<'a> {
+    fn from(name: &'a ModuleSpecifier) -> Self {
+        name.as_js_str()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleRequest {
+    pub name: ModuleSpecifier,
+    pub span: Span,
+}
+
+impl ModuleRequest {
+    pub fn name(&self) -> JSStr<'_> {
+        self.name.as_js_str()
+    }
+
+    fn from_module_record(
+        other: &oxc_syntax::module_record::ModuleRequest<'_>,
+        names: &FxHashMap<JSStr<'_>, ModuleSpecifier>,
+    ) -> Self {
+        Self { name: names[&other.name].clone(), span: other.span }
+    }
+}
+
+fn own_module_specifiers<'a>(
+    other: &oxc_syntax::module_record::ModuleRecord<'a>,
+) -> FxHashMap<JSStr<'a>, ModuleSpecifier> {
+    let mut owned = FxHashMap::default();
+    let mut indices = FxHashMap::default();
+    let mut names = Vec::new();
+    for name in other
+        .requested_modules
+        .keys()
+        .copied()
+        .chain(other.import_entries.iter().map(|entry| entry.module_request.name))
+        .chain(
+            other
+                .local_export_entries
+                .iter()
+                .chain(other.indirect_export_entries.iter())
+                .chain(other.star_export_entries.iter())
+                .filter_map(|entry| entry.module_request.as_ref().map(|request| request.name)),
+        )
+    {
+        if let Some(utf8) = name.as_str() {
+            owned
+                .entry(name)
+                .or_insert_with(|| ModuleSpecifier(ModuleSpecifierValue::Utf8(utf8.into())));
+            continue;
+        }
+        indices.entry(name).or_insert_with(|| {
+            let index = names.len();
+            names.push(name);
+            index
+        });
+    }
+    if names.is_empty() {
+        return owned;
+    }
+    let storage = Arc::new(ModuleSpecifierStorage::new(Allocator::new(), |allocator| {
+        names.iter().map(|name| name.clone_in(allocator)).collect()
+    }));
+    owned.extend(indices.into_iter().map(|(name, index)| {
+        (name, ModuleSpecifier(ModuleSpecifierValue::Wtf8 { storage: Arc::clone(&storage), index }))
+    }));
+    owned
+}
+
 /// [`ImportEntry`](https://tc39.es/ecma262/#importentry-record)
 ///
 /// ## Examples
@@ -173,7 +314,7 @@ pub struct ImportEntry {
     /// import { foo } from "mod";
     /// //                   ^^^
     /// ```
-    pub module_request: NameSpan,
+    pub module_request: ModuleRequest,
 
     /// The name under which the desired binding is exported by the module identified by `[[ModuleRequest]]`.
     ///
@@ -218,11 +359,14 @@ pub struct ImportEntry {
     pub is_type: bool,
 }
 
-impl<'a> From<&oxc_syntax::module_record::ImportEntry<'a>> for ImportEntry {
-    fn from(other: &oxc_syntax::module_record::ImportEntry<'a>) -> Self {
+impl ImportEntry {
+    fn from_module_record(
+        other: &oxc_syntax::module_record::ImportEntry<'_>,
+        names: &FxHashMap<JSStr<'_>, ModuleSpecifier>,
+    ) -> Self {
         Self {
             statement_span: other.statement_span,
-            module_request: NameSpan::from(&other.module_request),
+            module_request: ModuleRequest::from_module_record(&other.module_request, names),
             import_name: ImportImportName::from(&other.import_name),
             local_name: NameSpan::from(&other.local_name),
             is_type: other.is_type,
@@ -289,7 +433,7 @@ pub struct ExportEntry {
 
     /// The String value of the ModuleSpecifier of the ExportDeclaration.
     /// null if the ExportDeclaration does not have a ModuleSpecifier.
-    pub module_request: Option<NameSpan>,
+    pub module_request: Option<ModuleRequest>,
 
     /// The name under which the desired binding is exported by the module identified by `[[ModuleRequest]]`.
     /// null if the ExportDeclaration does not have a ModuleSpecifier.
@@ -318,12 +462,18 @@ pub struct ExportEntry {
     pub is_type: bool,
 }
 
-impl<'a> From<&oxc_syntax::module_record::ExportEntry<'a>> for ExportEntry {
-    fn from(other: &oxc_syntax::module_record::ExportEntry<'a>) -> Self {
+impl ExportEntry {
+    fn from_module_record(
+        other: &oxc_syntax::module_record::ExportEntry<'_>,
+        names: &FxHashMap<JSStr<'_>, ModuleSpecifier>,
+    ) -> Self {
         Self {
             statement_span: other.statement_span,
             span: other.span,
-            module_request: other.module_request.as_ref().map(NameSpan::from),
+            module_request: other
+                .module_request
+                .as_ref()
+                .map(|request| ModuleRequest::from_module_record(request, names)),
             import_name: ExportImportName::from(&other.import_name),
             export_name: ExportExportName::from(&other.export_name),
             local_name: ExportLocalName::from(&other.local_name),
@@ -465,32 +615,35 @@ impl ModuleRecord {
         other: &oxc_syntax::module_record::ModuleRecord,
         _semantic: &Semantic,
     ) -> Self {
+        let names = own_module_specifiers(other);
         Self {
             has_module_syntax: other.has_module_syntax,
             resolved_absolute_path: path.to_path_buf(),
             requested_modules: other
                 .requested_modules
                 .iter()
-                .map(|(name, requested_modules)| {
-                    (
-                        CompactStr::from(name.as_str()),
-                        requested_modules.iter().copied().collect::<Vec<_>>(),
-                    )
-                })
+                .map(|(name, requests)| (names[name].clone(), requests.iter().copied().collect()))
                 .collect(),
-            import_entries: other.import_entries.iter().map(ImportEntry::from).collect(),
-
+            import_entries: other
+                .import_entries
+                .iter()
+                .map(|entry| ImportEntry::from_module_record(entry, &names))
+                .collect(),
             local_export_entries: other
                 .local_export_entries
                 .iter()
-                .map(ExportEntry::from)
+                .map(|entry| ExportEntry::from_module_record(entry, &names))
                 .collect(),
             indirect_export_entries: other
                 .indirect_export_entries
                 .iter()
-                .map(ExportEntry::from)
+                .map(|entry| ExportEntry::from_module_record(entry, &names))
                 .collect(),
-            star_export_entries: other.star_export_entries.iter().map(ExportEntry::from).collect(),
+            star_export_entries: other
+                .star_export_entries
+                .iter()
+                .map(|entry| ExportEntry::from_module_record(entry, &names))
+                .collect(),
             exported_bindings: other
                 .exported_bindings
                 .iter()
@@ -534,7 +687,9 @@ impl ModuleRecord {
     ///
     /// * If the RwLock is poisoned (which only happens if a thread panicked while holding the lock).
     /// * If `ModuleRecord` is dropped (fails to Weak::upgrade).
-    pub fn get_loaded_module(&self, key: &str) -> Option<Arc<ModuleRecord>> {
+    pub fn get_loaded_module<'a>(&self, key: impl Into<JSStr<'a>>) -> Option<Arc<ModuleRecord>> {
+        // Loaded modules are populated only by the UTF-8 filesystem resolver.
+        let key = key.into().as_str()?;
         let loaded_modules = self.loaded_modules();
         loaded_modules.get(key).map(|weak| Weak::upgrade(weak).unwrap())
     }
@@ -598,5 +753,85 @@ impl ModuleRecord {
             out.extend(remote_module_record.exported_bindings.keys().cloned());
             remote_module_record.collect_star_exported_bindings(visited, out);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oxc_parser::Parser;
+    use oxc_semantic::SemanticBuilder;
+    use oxc_span::SourceType;
+
+    #[test]
+    fn jsstr_module_requests_outlive_parser_storage() {
+        let record = {
+            let allocator = Allocator::new();
+            let parsed = Parser::new(
+                &allocator,
+                r#"
+                import "x"; import "x";
+                import { v } from "x\uD800"; import "x\ud800";
+                export { v };
+                export { a } from "x\uD801";
+                export * from "x\uDC00";
+                export * as ns from "x\uD800\uDC00";
+            "#,
+                SourceType::mjs(),
+            )
+            .parse();
+            assert!(parsed.diagnostics.is_empty());
+            let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
+            let record = ModuleRecord::new(Path::new("test.js"), &parsed.module_record, &semantic);
+            assert_eq!(record.import_entries.len(), parsed.module_record.import_entries.len());
+            assert_eq!(
+                record.local_export_entries.len(),
+                parsed.module_record.local_export_entries.len()
+            );
+            assert_eq!(
+                record.indirect_export_entries.len(),
+                parsed.module_record.indirect_export_entries.len()
+            );
+            assert_eq!(
+                record.star_export_entries.len(),
+                parsed.module_record.star_export_entries.len()
+            );
+            Arc::new(record)
+        };
+        assert_eq!(record.requested_modules.len(), 5);
+        assert_eq!(record.requested_modules[&JSStr::from("x")].len(), 2);
+        let copy = Arc::clone(&record);
+        let requests = std::thread::spawn(move || {
+            let mut requests: Vec<_> = copy
+                .requested_modules
+                .iter()
+                .map(|(name, occurrences)| {
+                    (name.as_js_str().encode_utf16().collect::<Vec<_>>(), occurrences.len())
+                })
+                .collect();
+            requests.sort();
+            requests
+        })
+        .join()
+        .unwrap();
+        assert_eq!(
+            requests,
+            [
+                (vec![0x78], 2),
+                (vec![0x78, 0xD800], 2),
+                (vec![0x78, 0xD800, 0xDC00], 1),
+                (vec![0x78, 0xD801], 1),
+                (vec![0x78, 0xDC00], 1),
+            ]
+        );
+        assert!(record.import_entries[0].module_request.name().has_lone_surrogate());
+        assert!(
+            record.star_export_entries[0]
+                .module_request
+                .as_ref()
+                .unwrap()
+                .name()
+                .has_lone_surrogate()
+        );
     }
 }

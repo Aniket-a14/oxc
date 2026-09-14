@@ -1,0 +1,15 @@
+---
+source: crates/oxc_linter/src/tester.rs
+---
+
+  ⚠ vue(no-dupe-keys): Duplicate key '\uD800'. May cause name collision in script or template tag.
+   ╭─[no_dupe_keys.tsx:1:55]
+ 1 │ defineComponent({ props: ["\uD800"], data() { return {"\ud800": 1}; } });
+   ·                                                       ────────
+   ╰────
+
+  ⚠ vue(no-dupe-keys): Duplicate key '\uDC00'. May cause name collision in script or template tag.
+   ╭─[no_dupe_keys.tsx:1:48]
+ 1 │ defineComponent({ props: ["\uDC00"], methods: {"\udc00"() {}} });
+   ·                                                ────────
+   ╰────

@@ -1,5 +1,5 @@
 use itertools::Either;
-use lazy_regex::Regex;
+use lazy_regex::BytesRegex as Regex;
 use schemars::JsonSchema;
 
 use oxc_ast::{
@@ -19,7 +19,7 @@ use crate::{
     AstNode,
     context::LintContext,
     rule::{Rule, TupleRuleConfig},
-    utils::deserialize_regex_option,
+    utils::deserialize_bytes_regex_option,
 };
 
 fn expected_all_properties_shorthanded(span: Span) -> OxcDiagnostic {
@@ -65,7 +65,8 @@ pub struct ObjectShorthandOptions {
     avoid_quotes: bool,
     ignore_constructors: bool,
     avoid_explicit_return_arrows: bool,
-    #[serde(default, deserialize_with = "deserialize_regex_option")]
+    #[serde(default, deserialize_with = "deserialize_bytes_regex_option")]
+    #[schemars(with = "Option<lazy_regex::Regex>")]
     methods_ignore_pattern: Option<Regex>,
 }
 
@@ -359,10 +360,9 @@ fn check_longform_methods<'a>(
         return;
     }
 
-    if let (Some(pattern), Some(static_name)) = (
-        rule.methods_ignore_pattern.as_ref(),
-        property.key.static_name().and_then(oxc_ast::StaticName::into_utf8),
-    ) && pattern.is_match(static_name.as_ref())
+    if let (Some(pattern), Some(static_name)) =
+        (rule.methods_ignore_pattern.as_ref(), property.key.static_name())
+        && pattern.is_match(static_name.as_js_str().as_wtf8())
     {
         return;
     }
@@ -386,7 +386,7 @@ fn check_longform_methods<'a>(
 }
 
 fn check_shorthand_properties<'a>(ctx: &LintContext<'a>, property: &ObjectProperty<'a>) {
-    if let Some(property_name) = property.key.name().and_then(oxc_ast::StaticName::into_utf8) {
+    if let Some(property_name) = property.key.name() {
         ctx.diagnostic_with_fix(expected_property_longform(property.span), |fixer| {
             fixer.replace(property.span, format!("{property_name}: {property_name}"))
         });
@@ -415,7 +415,7 @@ fn check_longform_properties<'a>(
         return;
     }
 
-    if let Some(property_name) = property.key.name().and_then(oxc_ast::StaticName::into_utf8)
+    if let Some(property_name) = property.key.name()
         && property_name == value_identifier.name
     {
         ctx.diagnostic_with_fix(expected_property_shorthand(property.span), |fixer| {
@@ -592,9 +592,7 @@ fn is_redundant_property(property: &ObjectProperty) -> bool {
     match &property.value {
         Expression::FunctionExpression(func) => func.id.is_none(),
         Expression::Identifier(value_identifier) => {
-            if let Some(property_name) =
-                property.key.name().and_then(oxc_ast::StaticName::into_utf8)
-            {
+            if let Some(property_name) = property.key.name() {
                 property_name == value_identifier.name
             } else {
                 false

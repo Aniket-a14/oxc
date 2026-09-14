@@ -8,7 +8,11 @@ use crate::{
     rule::Rule,
 };
 
-fn named_diagnostic(imported_name: &str, module_name: &str, span: Span) -> OxcDiagnostic {
+fn named_diagnostic(
+    imported_name: &str,
+    module_name: impl std::fmt::Debug,
+    span: Span,
+) -> OxcDiagnostic {
     OxcDiagnostic::warn(format!("named import {imported_name:?} not found"))
         .with_help(format!("Does {module_name:?} have the export {imported_name:?}?"))
         .with_label(span)

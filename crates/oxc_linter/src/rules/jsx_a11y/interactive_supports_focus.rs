@@ -116,8 +116,9 @@ impl Rule for InteractiveSupportsFocus {
             return;
         }
 
-        let Some(role) =
-            has_jsx_prop_ignore_case(jsx_el, "role").and_then(get_string_literal_prop_value)
+        let Some(role) = has_jsx_prop_ignore_case(jsx_el, "role")
+            .and_then(get_string_literal_prop_value)
+            .and_then(oxc_str::JSStr::as_str)
         else {
             return;
         };
@@ -134,7 +135,7 @@ impl Rule for InteractiveSupportsFocus {
             return;
         }
 
-        let element_type = get_element_type(ctx, jsx_el);
+        let Some(element_type) = get_element_type(ctx, jsx_el).into_utf8() else { return };
 
         // Do not test unresolved custom components because their rendered DOM element is unknown.
         if !HTML_TAG.contains(element_type.as_ref()) {

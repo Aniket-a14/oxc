@@ -1,6 +1,6 @@
+use itertools::Itertools;
 use std::borrow::Cow;
 
-use itertools::Itertools;
 use rustc_hash::{FxHashMap, FxHashSet};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -111,6 +111,12 @@ declare_oxc_lint!(
     short_description = "Forbid importing the same module multiple times.",
 );
 
+#[derive(PartialEq, Eq, Hash)]
+enum ImportSource<'a> {
+    Literal(oxc_str::JSStr<'a>),
+    Resolved(std::path::PathBuf, Option<&'a str>),
+}
+
 impl Rule for NoDuplicates {
     fn from_configuration(value: serde_json::Value) -> Result<Self, serde_json::error::Error> {
         DefaultRuleConfig::<Self>::from_value(value).map(DefaultRuleConfig::into_inner)
@@ -121,36 +127,29 @@ impl Rule for NoDuplicates {
 
         let mut import_declarations: Option<FxHashMap<Span, &'a ImportDeclaration<'a>>> = None;
 
-        let groups = module_record
-            .requested_modules
-            .iter()
-            .map(|(source, requested_modules)| {
-                let resolved_absolute_path = module_record.get_loaded_module(source).map_or_else(
-                    || source.to_string(),
-                    |module| module.resolved_absolute_path.to_string_lossy().to_string(),
-                );
-                // When consider_query_string is true, include the query string in the grouping key.
-                // When false (default), strip query strings so imports with different query strings
-                // are grouped together as duplicates.
-                let grouping_key = if self.consider_query_string {
-                    // Include query string from the original source
-                    if let Some(query_pos) = source.as_str().find('?') {
-                        format!("{}{}", resolved_absolute_path, &source.as_str()[query_pos..])
+        let mut groups: FxHashMap<ImportSource<'_>, Vec<&RequestedModule>> = FxHashMap::default();
+        for (source, requests) in &module_record.requested_modules {
+            let grouping_key = module_record.get_loaded_module(source).map_or_else(
+                || ImportSource::Literal(source.as_js_str()),
+                |module| {
+                    let query = if self.consider_query_string {
+                        source.as_str().and_then(|source| source.find('?').map(|i| &source[i..]))
                     } else {
-                        resolved_absolute_path
-                    }
-                } else {
-                    resolved_absolute_path
-                };
-                (grouping_key, requested_modules)
-            })
-            .chunk_by(|r| r.0.clone());
+                        None
+                    };
+                    ImportSource::Resolved(module.resolved_absolute_path.clone(), query)
+                },
+            );
+            groups
+                .entry(grouping_key)
+                .or_default()
+                .extend(requests.iter().filter(|request| request.is_import));
+        }
 
-        for (_path, group) in &groups {
-            let requested_modules = group
-                .into_iter()
-                .flat_map(|(_path, requested_modules)| requested_modules)
-                .filter(|requested_module| requested_module.is_import);
+        for mut requested_modules in groups.into_values() {
+            // Alias spellings need not be adjacent in the source-key hash map.
+            // Report and merge each resolved group in source order.
+            requested_modules.sort_unstable_by_key(|request| request.span.start);
             // When prefer_inline is false, 0 is value, 1 is type named, 2 is type namespace and 3 is type default
             // When prefer_inline is true, 0 is value and type named, 2 is type // namespace and 3 is type default
             let mut import_entries_maps: FxHashMap<u8, Vec<&RequestedModule>> =
@@ -1053,4 +1052,38 @@ import type {Bar // comment
         .with_import_plugin(true)
         .expect_fix(fix)
         .test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr() {
+    use crate::tester::Tester;
+    let pass = vec![r#"import "x\uD800"; import "x\uD801"; import "x\uDC00"; import "x\\uD800";"#];
+    let fail = vec![
+        r#"import "x"; import "x";"#,
+        r#"import "x\uD800"; import "x\ud800";"#,
+        r#"import "x\uDC00"; import "x\udc00";"#,
+        r#"import "x\uD800\uDC00"; import "x𐀀";"#,
+    ];
+    Tester::new(NoDuplicates::NAME, NoDuplicates::PLUGIN, pass, fail)
+        .with_snapshot_suffix("jsstr")
+        .intentionally_allow_no_fix_tests()
+        .change_rule_path("index.ts")
+        .with_import_plugin(true)
+        .test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr_alias_groups() {
+    use crate::tester::Tester;
+    let pass = vec![r#"import "./foo"; import "./bar"; import "x\uD800";"#];
+    let fail = vec![
+        r#"import "./bar?first"; import "./foo"; import "x\uD800"; import "./bar.js?last";"#,
+        r#"import "./foo"; import "./bar?first"; import "x\uDC00"; import "./bar.js?last";"#,
+    ];
+    let fix = fail.iter().map(|source| (*source, *source, None)).collect::<Vec<_>>();
+    Tester::new(NoDuplicates::NAME, NoDuplicates::PLUGIN, pass, fail)
+        .change_rule_path("index.ts")
+        .with_import_plugin(true)
+        .expect_fix(fix)
+        .test();
 }

@@ -243,7 +243,7 @@ fn apply_early_return_to_scope<'a>(
                         reactive: false,
                         span: None, // GeneratedSource
                     },
-                    property: PropertyLiteral::String(Ident::from("for")),
+                    property: PropertyLiteral::String(Ident::from("for").into()),
                     computed: false,
                     property_span: None,
                     span: None,

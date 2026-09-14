@@ -48,7 +48,10 @@ pub fn is_create_element_call(call_expr: &CallExpression) -> bool {
                 return false;
             }
 
-            member_expr.static_property_name().is_some_and(|name| name == "createElement")
+            member_expr
+                .static_property_name()
+                .and_then(oxc_str::JSStr::as_str)
+                .is_some_and(|name| name == "createElement")
         }
         Expression::Identifier(ident) => ident.name == "createElement",
         _ => false,
@@ -86,8 +89,10 @@ pub fn get_jsx_attribute_name<'a>(attr: &JSXAttributeName<'a>) -> Cow<'a, str> {
     }
 }
 
-pub fn get_string_literal_prop_value<'a>(item: &'a JSXAttributeItem<'_>) -> Option<&'a str> {
-    get_prop_value(item).and_then(JSXAttributeValue::as_string_literal).map(|s| s.value.as_str())
+pub fn get_string_literal_prop_value<'a>(
+    item: &JSXAttributeItem<'a>,
+) -> Option<oxc_str::JSStr<'a>> {
+    get_prop_value(item).and_then(JSXAttributeValue::as_string_literal).map(|s| s.value)
 }
 
 // TODO: Move the a11y methods to their own util for jsx-a11y?
@@ -98,12 +103,12 @@ pub fn is_hidden_from_screen_reader<'a>(
     node: &JSXOpeningElement<'a>,
 ) -> bool {
     let name = get_element_type(ctx, node);
-    if name.eq_ignore_ascii_case("input")
+    if name.as_js_str().eq_ignore_ascii_case("input".into())
         && let Some(item) = has_jsx_prop_ignore_case(node, "type")
     {
         let hidden = get_string_literal_prop_value(item);
 
-        if hidden.is_some_and(|val| val.eq_ignore_ascii_case("hidden")) {
+        if hidden.is_some_and(|val| val.eq_ignore_ascii_case("hidden".into())) {
             return true;
         }
     }
@@ -162,7 +167,10 @@ pub fn is_presentation_role(jsx_opening_el: &JSXOpeningElement) -> bool {
         return false;
     };
 
-    matches!(get_string_literal_prop_value(role), Some("presentation" | "none"))
+    matches!(
+        get_string_literal_prop_value(role).and_then(oxc_str::JSStr::as_str),
+        Some("presentation" | "none")
+    )
 }
 
 // ref: https://github.com/jsx-eslint/eslint-plugin-jsx-a11y/blob/8f75961d965e47afb88854d324bd32fafde7acfe/src/util/isAbstractRole.js
@@ -170,7 +178,7 @@ pub fn is_abstract_role<'a>(ctx: &LintContext<'a>, jsx_opening_el: &JSXOpeningEl
     // Do not test custom JSX components, we do not know what
     // low-level DOM element this maps to.
     let element_type = get_element_type(ctx, jsx_opening_el);
-    if !HTML_TAG.contains(element_type.as_ref()) {
+    if !element_type.as_str().is_some_and(|name| HTML_TAG.contains(name)) {
         return false;
     }
 
@@ -179,7 +187,7 @@ pub fn is_abstract_role<'a>(ctx: &LintContext<'a>, jsx_opening_el: &JSXOpeningEl
     };
 
     matches!(
-        get_string_literal_prop_value(role),
+        get_string_literal_prop_value(role).and_then(oxc_str::JSStr::as_str),
         Some(
             "command"
                 | "composite"
@@ -214,7 +222,7 @@ pub fn is_interactive_element(element_type: &str, jsx_opening_el: &JSXOpeningEle
         "input" => {
             if let Some(input_type) = has_jsx_prop(jsx_opening_el, "type")
                 && get_string_literal_prop_value(input_type)
-                    .is_some_and(|val| val.eq_ignore_ascii_case("hidden"))
+                    .is_some_and(|val| val.eq_ignore_ascii_case("hidden".into()))
             {
                 return false;
             }
@@ -230,7 +238,7 @@ pub fn is_interactive_element(element_type: &str, jsx_opening_el: &JSXOpeningEle
 pub fn is_non_interactive_element(element_type: &str, jsx_opening_el: &JSXOpeningElement) -> bool {
     // Do not test custom JSX components, we do not know what
     // low-level DOM element this maps to.
-    if !HTML_TAG.contains(element_type.as_ref()) {
+    if !HTML_TAG.contains(element_type) {
         return false;
     }
 
@@ -561,7 +569,9 @@ pub fn is_es5_component(node: &AstNode) -> bool {
     if let Some(member_expr) = call_expr.callee.as_member_expression()
         && let Expression::Identifier(ident) = member_expr.object()
     {
-        return ident.name == PRAGMA && member_expr.static_property_name() == Some(CREATE_CLASS);
+        return ident.name == PRAGMA
+            && member_expr.static_property_name().and_then(oxc_str::JSStr::as_str)
+                == Some(CREATE_CLASS);
     }
 
     if let Some(ident_reference) = call_expr.callee.get_identifier_reference() {
@@ -585,6 +595,7 @@ pub fn is_es6_component(node: &AstNode) -> bool {
             return ident.name == PRAGMA
                 && member_expr
                     .static_property_name()
+                    .and_then(oxc_str::JSStr::as_str)
                     .is_some_and(|name| name == COMPONENT || name == PURE_COMPONENT);
         }
 
@@ -680,7 +691,7 @@ pub fn get_jsx_element_name<'a>(name: &JSXElementName<'a>) -> Cow<'a, str> {
 pub fn get_element_type<'c, 'a>(
     context: &'c LintContext<'a>,
     element: &JSXOpeningElement<'a>,
-) -> Cow<'c, str> {
+) -> oxc_ast::StaticName<'c> {
     let name = get_jsx_element_name(&element.name);
 
     let OxlintSettings { jsx_a11y, .. } = context.settings();
@@ -693,18 +704,26 @@ pub fn get_element_type<'c, 'a>(
         })
         .and_then(get_prop_value)
         .and_then(JSXAttributeValue::as_string_literal)
-        .map(|s| s.value.as_str());
+        .map(|s| s.value);
 
-    let raw_type = polymorphic_prop.map_or(name, Cow::Borrowed);
-    match jsx_a11y.components.get(raw_type.as_ref()) {
-        Some(component) => Cow::Borrowed(component),
+    let raw_type = polymorphic_prop.map_or_else(
+        || match name {
+            Cow::Borrowed(name) => oxc_ast::StaticName::from(name),
+            Cow::Owned(name) => oxc_ast::StaticName::Owned(name),
+        },
+        oxc_ast::StaticName::from,
+    );
+    // Settings use UTF-8 keys. An unrepresentable polymorphic name is still the
+    // element's name; it cannot match a mapping and must not fall back to the tag.
+    match raw_type.as_str().and_then(|name| jsx_a11y.components.get(name)) {
+        Some(component) => oxc_ast::StaticName::from(component.as_str()),
         None => raw_type,
     }
 }
 
 pub fn parse_jsx_value(value: &JSXAttributeValue) -> Result<f64, ()> {
     match value {
-        JSXAttributeValue::StringLiteral(str) => str.value.parse().or(Err(())),
+        JSXAttributeValue::StringLiteral(str) => str.value.as_str().ok_or(())?.parse().or(Err(())),
         JSXAttributeValue::ExpressionContainer(container) => {
             parse_jsx_expression(&container.expression)
         }
@@ -722,7 +741,7 @@ fn parse_jsx_expression(expression: &JSXExpression) -> Result<f64, ()> {
 
 fn parse_expression(expression: &Expression) -> Result<f64, ()> {
     match expression {
-        Expression::StringLiteral(str) => str.value.parse().or(Err(())),
+        Expression::StringLiteral(str) => str.value.as_str().ok_or(())?.parse().or(Err(())),
         Expression::TemplateLiteral(tmpl) => {
             tmpl.quasis.first().unwrap().value.raw.parse().or(Err(()))
         }
@@ -792,7 +811,7 @@ pub fn is_react_component_or_hook_name(name: &str) -> bool {
 }
 
 pub fn is_react_function_call(call: &CallExpression, expected_call: &str) -> bool {
-    let Some(subject) = call.callee_name() else { return false };
+    let Some(subject) = call.callee_name().and_then(oxc_str::JSStr::as_str) else { return false };
 
     if subject != expected_call {
         return false;
@@ -982,7 +1001,7 @@ pub fn find_innermost_function_with_jsx<'a>(
     match expr {
         Expression::CallExpression(call) => {
             // Check if this is a HOC call
-            if let Some(callee_name) = call.callee_name()
+            if let Some(callee_name) = call.callee_name().and_then(oxc_str::JSStr::as_str)
                 && is_hoc_call(callee_name, ctx)
             {
                 // This is a HOC, recursively check the first argument
@@ -1309,6 +1328,229 @@ mod test {
 
             let found = semantic.nodes().iter().any(|node| is_es6_component(node));
             assert_eq!(found, expected, "Failed for: {source}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod jsstr_tests {
+    use crate::{
+        AllowWarnDeny, ContextHost,
+        config::LintConfig,
+        context::{ContextSubHost, ContextSubHostOptions},
+        options::LintOptions,
+        rules::RULES,
+    };
+    use oxc_allocator::Allocator;
+    use oxc_ast::{AstKind, ast::StringLiteral};
+    use oxc_ast_visit::{VisitMut, walk_mut};
+    use oxc_parser::Parser;
+    use oxc_semantic::SemanticBuilder;
+    use oxc_span::SourceType;
+    use oxc_str::{JSStr, JSStrBuilder};
+    use std::{rc::Rc, sync::Arc};
+
+    #[test]
+    fn jsx_string_analysis_preserves_surrogate_tokens_and_element_types() {
+        struct ReplaceMarker<'a>(JSStr<'a>);
+        impl<'a> VisitMut<'a> for ReplaceMarker<'a> {
+            fn visit_string_literal(&mut self, literal: &mut StringLiteral<'a>) {
+                if literal.value == "MARKER" {
+                    literal.value = self.0;
+                    literal.raw = None;
+                }
+                walk_mut::walk_string_literal(self, literal);
+            }
+        }
+        let cases = [
+            ("no-html-link-for-pages", r#"<a href="MARKER">About</a>"#, "/about", "", true),
+            (
+                "no-html-link-for-pages",
+                r#"<a href="MARKER">About</a>"#,
+                "https://example.com/",
+                "",
+                false,
+            ),
+            (
+                "no-unwanted-polyfillio",
+                r#"<script src="MARKER" />"#,
+                "https://polyfill.io/v3/",
+                "",
+                true,
+            ),
+            (
+                "no-unwanted-polyfillio",
+                r#"<script src="MARKER" />"#,
+                "https://polyfill-fastly.net/v3/?features=",
+                "%2CPromise",
+                true,
+            ),
+            (
+                "no-unwanted-polyfillio",
+                r#"<script src="MARKER" />"#,
+                "https://polyfill-fastly.net/v3/?features=Promise,",
+                "",
+                true,
+            ),
+            (
+                "google-font-display",
+                r#"<link href="MARKER" />"#,
+                "https://fonts.googleapis.com/css?family=",
+                "",
+                true,
+            ),
+            (
+                "google-font-display",
+                r#"<link href="MARKER" />"#,
+                "https://fonts.googleapis.com/css?family=",
+                "&display=block",
+                true,
+            ),
+            (
+                "google-font-preconnect",
+                r#"<link href="MARKER" />"#,
+                "https://fonts.gstatic.com/",
+                "",
+                true,
+            ),
+            (
+                "no-page-custom-font",
+                r#"<link href="MARKER" />"#,
+                "https://fonts.googleapis.com/css?family=",
+                "",
+                true,
+            ),
+            (
+                "next-script-for-ga",
+                r#"<script src="MARKER" />"#,
+                "https://www.google-analytics.com/analytics.js?",
+                "",
+                true,
+            ),
+            ("no-css-tags", r#"<link rel="stylesheet" href="MARKER" />"#, "", ".css", true),
+            ("alt-text", r#"<object title="MARKER" />"#, "", "", false),
+            ("anchor-ambiguous-text", r#"<a aria-label="MARKER">click here</a>"#, "", "", false),
+            (
+                "anchor-ambiguous-text",
+                r#"<a><span aria-label="MARKER">click here</span></a>"#,
+                "",
+                "",
+                false,
+            ),
+            ("role-has-required-aria-props", r#"<div role="MARKER" />"#, "checkbox ", "", true),
+            ("prefer-tag-over-role", r#"<div role="MARKER" />"#, "", " button", true),
+            ("no-redundant-roles", r#"<button role="MARKER" />"#, "", " button", true),
+            (
+                "no-interactive-element-to-noninteractive-role",
+                r#"<button role="MARKER" />"#,
+                "article ",
+                "",
+                true,
+            ),
+            (
+                "no-noninteractive-element-to-interactive-role",
+                r#"<article role="MARKER" />"#,
+                "button ",
+                "",
+                true,
+            ),
+            (
+                "no-static-element-interactions",
+                r#"<div onClick={() => {}} role="MARKER" />"#,
+                "",
+                "",
+                true,
+            ),
+            (
+                "no-static-element-interactions",
+                r#"<div onClick={() => {}} role="MARKER" />"#,
+                "button ",
+                "",
+                false,
+            ),
+            (
+                "no-noninteractive-tabindex",
+                r#"<div tabIndex={0} role="MARKER" />"#,
+                "button ",
+                "",
+                false,
+            ),
+            (
+                "no-noninteractive-element-interactions",
+                r#"<div onClick={() => {}} role="MARKER" />"#,
+                "",
+                " article",
+                true,
+            ),
+            ("jsx-no-script-url", r#"<a href="MARKER" />"#, "javascript:", "", true),
+            (
+                "no-interactive-element-to-noninteractive-role",
+                r#"<button as="MARKER" role="article" />"#,
+                "Custom",
+                "",
+                false,
+            ),
+            ("prefer-tag-over-role", r#"<div as="MARKER" role="button" />"#, "Custom", "", true),
+            (
+                "role-supports-aria-props",
+                r#"<div as="MARKER" role="button" aria-checked="true" />"#,
+                "Custom",
+                "",
+                true,
+            ),
+            (
+                "no-aria-hidden-on-focusable",
+                r#"<button as="MARKER" aria-hidden="true" tabIndex={0} />"#,
+                "Custom",
+                "",
+                true,
+            ),
+        ];
+        for units in [&[0xE000][..], &[0xD800], &[0xDC00], &[0xD800, 0xDC00]] {
+            for (rule_name, source, prefix, suffix, should_report) in cases {
+                let allocator = Allocator::new();
+                let mut builder = JSStrBuilder::new_in(&allocator);
+                builder.push_str(prefix);
+                builder.push_utf16(units);
+                builder.push_str(suffix);
+                let value = builder.into_js_str();
+                let mut parsed = Parser::new(&allocator, source, SourceType::jsx()).parse();
+                assert!(parsed.diagnostics.is_empty());
+                // A quoted JSX attribute keeps literal escape/entity text. Mutate
+                // the AST so these tests exercise actual surrogate code points.
+                ReplaceMarker(value).visit_program(&mut parsed.program);
+                let program = allocator.alloc(parsed.program);
+                let semantic = SemanticBuilder::new_linter().build(program).semantic;
+                let mut config = LintConfig::default();
+                config.settings.jsx_a11y.polymorphic_prop_name = Some("as".into());
+                let host = Rc::new(ContextHost::new(
+                    "test.jsx",
+                    vec![ContextSubHost::new(
+                        semantic,
+                        Arc::default(),
+                        0,
+                        ContextSubHostOptions::default(),
+                    )],
+                    &allocator,
+                    LintOptions::default(),
+                    Arc::new(config),
+                ));
+                let rule = RULES.iter().find(|rule| rule.name() == rule_name).unwrap();
+                let ctx = Rc::clone(&host).spawn(rule, AllowWarnDeny::Warn);
+                for node in ctx.nodes().iter() {
+                    if source.contains("as=\"MARKER\"")
+                        && let AstKind::JSXOpeningElement(element) = node.kind()
+                    {
+                        assert_eq!(super::get_element_type(&ctx, element).as_js_str(), value);
+                    }
+                    rule.run::<false>(node, &ctx, None);
+                }
+                assert_eq!(
+                    host.diagnostic_count() != 0,
+                    should_report,
+                    "{rule_name}: {source}, {value:?}"
+                );
+            }
         }
     }
 }

@@ -57,7 +57,8 @@ impl Rule for NoImportNodeTest {
     fn run_once(&self, ctx: &LintContext<'_>) {
         let module_record = ctx.module_record();
 
-        if let Some(node_test_module) = module_record.requested_modules.get("node:test")
+        if let Some(node_test_module) =
+            module_record.requested_modules.get(&oxc_str::JSStr::from("node:test"))
             && let Some(requested_module) = node_test_module.first()
         {
             ctx.diagnostic_with_suggestion(no_import_node_test(requested_module.span), |fixer| {

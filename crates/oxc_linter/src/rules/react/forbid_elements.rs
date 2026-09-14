@@ -136,7 +136,8 @@ impl Rule for ForbidElements {
     fn run<'a>(&self, node: &AstNode<'a>, ctx: &LintContext<'a>) {
         match node.kind() {
             AstKind::JSXOpeningElement(jsx_el) => {
-                let name = &get_element_type(ctx, jsx_el);
+                let Some(name) = get_element_type(ctx, jsx_el).into_utf8() else { return };
+                let name = &name;
 
                 self.add_diagnostic_if_invalid_element(ctx, name, jsx_el.name.span());
             }
@@ -157,10 +158,13 @@ impl Rule for ForbidElements {
                         self.add_diagnostic_if_invalid_element(ctx, it.name.as_str(), it.span);
                     }
                     Argument::StringLiteral(str) => {
-                        if !is_valid_literal(&str.value) {
+                        let Some(value) = str.value.as_str() else {
+                            return;
+                        };
+                        if !is_valid_literal(value) {
                             return;
                         }
-                        self.add_diagnostic_if_invalid_element(ctx, str.value.as_str(), str.span);
+                        self.add_diagnostic_if_invalid_element(ctx, value, str.span);
                     }
                     Argument::StaticMemberExpression(member_expression) => {
                         let Some(it) = member_expression.object.get_identifier_reference() else {

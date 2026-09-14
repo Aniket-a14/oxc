@@ -14,7 +14,7 @@ use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_semantic::AstNode;
 use oxc_span::Span;
-use oxc_str::CompactStr;
+use oxc_str::JSStr;
 
 fn no_invalid_fetch_options_diagnostic(span: Span, method: &str) -> OxcDiagnostic {
     let message = format!(r#""body" is not allowed when method is "{method}""#);
@@ -137,14 +137,14 @@ fn is_invalid_fetch_options<'a>(
                         && ctx.scoping().symbol_flags(symbol_id).is_enum()
                     {
                         let decl = ctx.semantic().symbol_declaration(symbol_id);
-                        let enum_member_res: Option<CompactStr> = match decl.kind() {
+                        let enum_member_res: Option<JSStr<'_>> = match decl.kind() {
                             AstKind::TSEnumDeclaration(enum_decl) => {
-                                let member_string_lit: Option<CompactStr> =
+                                let member_string_lit: Option<JSStr<'_>> =
                                     enum_decl.body.members.iter().find_map(|m| {
                                         if let Some(Expression::StringLiteral(str_lit)) =
                                             &m.initializer
                                         {
-                                            Some(str_lit.value.to_compact_str())
+                                            Some(str_lit.value)
                                         } else {
                                             None
                                         }
@@ -155,14 +155,18 @@ fn is_invalid_fetch_options<'a>(
                         };
 
                         if let Some(value_ident) = enum_member_res {
-                            method_name = value_ident.into();
+                            method_name =
+                                value_ident.as_str().map_or(UNKNOWN_METHOD_NAME, Cow::Borrowed);
                         }
                     } else {
                         method_name = UNKNOWN_METHOD_NAME;
                     }
                 }
                 Expression::StringLiteral(value_ident) => {
-                    method_name = value_ident.value.cow_to_ascii_uppercase();
+                    method_name = value_ident
+                        .value
+                        .as_str()
+                        .map_or(UNKNOWN_METHOD_NAME, cow_utils::CowUtils::cow_to_ascii_uppercase);
                 }
                 Expression::TemplateLiteral(template_lit) => {
                     method_name = extract_method_name_from_template_literal(template_lit);
@@ -181,7 +185,10 @@ fn is_invalid_fetch_options<'a>(
                     match decl.kind() {
                         AstKind::VariableDeclarator(declarator) => match &declarator.init {
                             Some(Expression::StringLiteral(str_lit)) => {
-                                method_name = str_lit.value.cow_to_ascii_uppercase();
+                                method_name =
+                                    str_lit.value.as_str().map_or(UNKNOWN_METHOD_NAME, |value| {
+                                        value.cow_to_ascii_uppercase()
+                                    });
                             }
                             Some(Expression::TemplateLiteral(template_lit)) => {
                                 method_name =
@@ -202,9 +209,19 @@ fn is_invalid_fetch_options<'a>(
                                         if let TSType::TSLiteralType(ty) = ty {
                                             let TSLiteralType { literal, .. } = &**ty;
                                             if let TSLiteral::StringLiteral(str_lit) = literal {
-                                                return str_lit.value.cow_to_ascii_uppercase()
+                                                return str_lit
+                                                    .value
+                                                    .as_str()
+                                                    .map_or(UNKNOWN_METHOD_NAME, |value| {
+                                                        value.cow_to_ascii_uppercase()
+                                                    })
                                                     == "GET"
-                                                    || str_lit.value.cow_to_ascii_uppercase()
+                                                    || str_lit
+                                                        .value
+                                                        .as_str()
+                                                        .map_or(UNKNOWN_METHOD_NAME, |value| {
+                                                            value.cow_to_ascii_uppercase()
+                                                        })
                                                         == "HEAD";
                                             }
                                         }
@@ -216,7 +233,12 @@ fn is_invalid_fetch_options<'a>(
                                 TSType::TSLiteralType(literal_type) => {
                                     let TSLiteralType { literal, .. } = &**literal_type;
                                     if let TSLiteral::StringLiteral(str_lit) = literal {
-                                        method_name = str_lit.value.cow_to_ascii_uppercase();
+                                        method_name = str_lit
+                                            .value
+                                            .as_str()
+                                            .map_or(UNKNOWN_METHOD_NAME, |value| {
+                                                value.cow_to_ascii_uppercase()
+                                            });
                                     }
                                 }
                                 _ => {
@@ -358,4 +380,16 @@ fn test() {
     Tester::new(NoInvalidFetchOptions::NAME, NoInvalidFetchOptions::PLUGIN, pass, fail)
         .change_rule_path_extension("mts")
         .test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr_enum_method() {
+    use crate::tester::Tester;
+    let pass = vec![
+        r#"enum Method { Custom = "\uD800", Get = "GET" } fetch(url, { method: Method.Custom, body: value });"#,
+        r#"enum Method { Custom = "\uDC00", Get = "GET" } fetch(url, { method: Method.Custom, body: value });"#,
+    ];
+    let fail =
+        vec![r#"enum Method { Get = "GET" } fetch(url, { method: Method.Get, body: value });"#];
+    Tester::new(NoInvalidFetchOptions::NAME, NoInvalidFetchOptions::PLUGIN, pass, fail).test();
 }

@@ -1,7 +1,7 @@
 use std::hash::Hash;
 
 use itertools::Itertools;
-use lazy_regex::{Regex, regex};
+use lazy_regex::{BytesRegex as Regex, regex};
 use rustc_hash::FxHashMap;
 
 use oxc_ast::{
@@ -10,7 +10,7 @@ use oxc_ast::{
 };
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_span::{GetSpan, Span};
-use oxc_str::CompactStr;
+use oxc_str::{CompactStr, JSStr};
 
 use crate::{
     context::LintContext,
@@ -234,7 +234,7 @@ impl ValidTitleConfig {
         match arg {
             Argument::StringLiteral(string_literal) => {
                 validate_title(
-                    &string_literal.value,
+                    string_literal.value,
                     string_literal.span,
                     config,
                     &jest_fn_call.name,
@@ -251,24 +251,12 @@ impl ValidTitleConfig {
                 }
 
                 if let Some(quasi) = tagged_template.quasi.single_quasi() {
-                    validate_title(
-                        quasi.as_str(),
-                        tagged_template.span,
-                        config,
-                        &jest_fn_call.name,
-                        ctx,
-                    );
+                    validate_title(quasi, tagged_template.span, config, &jest_fn_call.name, ctx);
                 }
             }
             Argument::TemplateLiteral(template_literal) => {
                 if let Some(quasi) = template_literal.single_quasi() {
-                    validate_title(
-                        quasi.as_str(),
-                        template_literal.span,
-                        config,
-                        &jest_fn_call.name,
-                        ctx,
-                    );
+                    validate_title(quasi, template_literal.span, config, &jest_fn_call.name, ctx);
                 }
             }
             Argument::BinaryExpression(binary_expr) => {
@@ -288,6 +276,9 @@ impl ValidTitleConfig {
     }
 }
 
+// Configured patterns use Rust regex Unicode semantics over WTF-8 bytes.
+// ASCII and Unicode scalar matches remain available around lone surrogates;
+// Unicode character classes do not include surrogate code points.
 type CompiledMatcherAndMessage = (Regex, Option<CompactStr>);
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -403,7 +394,7 @@ fn compile_matcher_pattern(pattern: MatcherPattern) -> Option<CompiledMatcherAnd
 }
 
 fn validate_title(
-    title: &str,
+    title: JSStr,
     span: Span,
     config: &ValidTitleConfig,
     name: &str,
@@ -415,14 +406,20 @@ fn validate_title(
     }
 
     if let Some(disallowed_words_reg) = &config.disallowed_words_reg {
-        if let Some(matched) = disallowed_words_reg.find(title) {
-            ctx.diagnostic(disallowed_word_diagnostic(matched.as_str(), span));
+        if let Some(matched) = disallowed_words_reg.find(title.as_wtf8()) {
+            ctx.diagnostic(disallowed_word_diagnostic(
+                std::str::from_utf8(matched.as_bytes())
+                    .expect("a configured word matches valid UTF-8"),
+                span,
+            ));
         }
         return;
     }
 
-    let trimmed_title = title.trim();
-    if !config.ignore_spaces && trimmed_title != title {
+    let is_whitespace = |ch: oxc_str::JSChar| ch.to_char().is_some_and(char::is_whitespace);
+    let has_outer_whitespace = title.chars().next().is_some_and(is_whitespace)
+        || title.chars().last().is_some_and(is_whitespace);
+    if !config.ignore_spaces && has_outer_whitespace {
         ctx.diagnostic_with_fix(accidental_space_diagnostic(span), |fixer| {
             let inner_span = span.shrink(1);
             let raw_text = fixer.source_range(inner_span);
@@ -432,9 +429,7 @@ fn validate_title(
     }
 
     let un_prefixed_name = name.trim_start_matches(['f', 'x']);
-    let Some(first_word) = title.split(' ').next() else {
-        return;
-    };
+    let first_word = title.split_once(" ").map_or(title, |(first, _)| first);
 
     if first_word == un_prefixed_name {
         ctx.diagnostic_with_fix(duplicate_prefix_diagnostic(span), |fixer| {
@@ -455,7 +450,7 @@ fn validate_title(
     };
 
     if let Some((regex, message)) = config.must_match_patterns.get(&jest_fn_name)
-        && !regex.is_match(title)
+        && !regex.is_match(title.as_wtf8())
     {
         let raw_pattern = regex.as_str();
         let message = match message.as_ref() {
@@ -466,7 +461,7 @@ fn validate_title(
     }
 
     if let Some((regex, message)) = config.must_not_match_patterns.get(&jest_fn_name)
-        && regex.is_match(title)
+        && regex.is_match(title.as_wtf8())
     {
         let raw_pattern = regex.as_str();
         let message = match message.as_ref() {

@@ -208,7 +208,9 @@ impl ValidExpectConfig {
 
         let should_be_awaited =
             jest_fn_call.modifiers().any(|modifier| modifier.is_name_unequal("not"))
-                || self.async_matchers.contains(&matcher_name.to_string());
+                || matcher_name
+                    .as_str()
+                    .is_some_and(|name| self.async_matchers.iter().any(|matcher| matcher == name));
 
         if matches!(parent.kind(), AstKind::Program(_)) || !should_be_awaited {
             return;
@@ -463,7 +465,7 @@ fn get_parent_if_thenable<'a, 'b>(
     let Some(member_expr) = call_expr.callee.as_member_expression() else {
         return node;
     };
-    let Some(name) = member_expr.static_property_name() else {
+    let Some(name) = member_expr.static_property_name().and_then(oxc_str::JSStr::as_str) else {
         return node;
     };
 

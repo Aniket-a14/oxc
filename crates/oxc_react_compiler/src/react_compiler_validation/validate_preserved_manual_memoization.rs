@@ -576,7 +576,9 @@ fn pretty_print_scope_dependency(
         .map(|entry| {
             let prefix = if entry.optional { "?." } else { "." };
             match &entry.property {
-                PropertyLiteral::String(s) => format!("{prefix}{s}"),
+                PropertyLiteral::String(s) => {
+                    format!("{prefix}{}", oxc_ast::StaticName::Borrowed(*s))
+                }
                 PropertyLiteral::Number(n) => format!("{prefix}{n}"),
             }
         })
@@ -606,7 +608,9 @@ fn print_manual_memo_dependency(
         .map(|entry| {
             let prefix = if with_optional && entry.optional { "?." } else { "." };
             match &entry.property {
-                PropertyLiteral::String(s) => format!("{prefix}{s}"),
+                PropertyLiteral::String(s) => {
+                    format!("{prefix}{}", oxc_ast::StaticName::Borrowed(*s))
+                }
                 PropertyLiteral::Number(n) => format!("{prefix}{n}"),
             }
         })

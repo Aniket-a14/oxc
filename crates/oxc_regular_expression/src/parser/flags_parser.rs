@@ -72,7 +72,7 @@ impl<'a> FlagsParser<'a> {
                 char::try_from(cp).ok().and_then(|c| Flags::try_from(c).ok()).ok_or_else(|| {
                     diagnostics::unknown_flag(
                         self.span_factory.create(span_start, span_end),
-                        &self.reader.str(span_start, span_end),
+                        &self.reader.str(span_start, span_end).expect("flag source is UTF-8"),
                         &["d", "g", "i", "m", "s", "u", "v", "y"],
                     )
                 })?;
@@ -80,7 +80,7 @@ impl<'a> FlagsParser<'a> {
             if seen.contains(flag) {
                 return Err(diagnostics::duplicated_flags(
                     self.span_factory.create(span_start, span_end),
-                    &self.reader.str(span_start, span_end),
+                    &self.reader.str(span_start, span_end).expect("flag source is UTF-8"),
                 ));
             }
 

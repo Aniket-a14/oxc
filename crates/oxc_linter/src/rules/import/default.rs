@@ -4,7 +4,7 @@ use oxc_span::{Span, VALID_EXTENSIONS};
 
 use crate::{context::LintContext, module_record::ImportImportName, rule::Rule};
 
-fn default_diagnostic(imported_name: &str, span: Span) -> OxcDiagnostic {
+fn default_diagnostic(imported_name: impl std::fmt::Debug, span: Span) -> OxcDiagnostic {
     OxcDiagnostic::warn(format!("No default export found in imported module {imported_name:?}"))
         .with_help(format!("Does {imported_name:?} have the default export?"))
         .with_label(span)

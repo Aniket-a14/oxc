@@ -65,13 +65,19 @@ pub fn run_once(ctx: &LintContext) {
             return;
         };
 
-        if contains_mocks_dir(&string_literal.value) {
+        if contains_mocks_dir(string_literal.value) {
             ctx.diagnostic(no_mocks_import_diagnostic(string_literal.span));
         }
     }
 }
 
-fn contains_mocks_dir(value: &str) -> bool {
+fn contains_mocks_dir(value: oxc_str::JSStr<'_>) -> bool {
+    let Some(value) = value.as_str() else {
+        return value
+            .as_wtf8()
+            .split(|&byte| byte == b'/' || (cfg!(windows) && byte == b'\\'))
+            .any(|part| part == b"__mocks__");
+    };
     PathBuf::from(value).components().any(|c| match c {
         std::path::Component::Normal(p) => p == std::ffi::OsStr::new("__mocks__"),
         _ => false,

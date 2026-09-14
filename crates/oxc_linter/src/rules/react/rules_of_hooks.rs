@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use oxc_ast::StaticName;
 
 use lazy_regex::Regex;
 use rustc_hash::{FxBuildHasher, FxHashSet};
@@ -276,8 +276,10 @@ impl Rule for RulesOfHooks {
         let cfg = ctx.cfg();
 
         let span = call.span;
-        let hook_name =
-            call.callee_name().expect("We identify hooks using their names so it should be named.");
+        let hook_name = call
+            .callee_name()
+            .and_then(oxc_str::JSStr::as_str)
+            .expect("We identify hooks using their names so it should be named.");
 
         let nodes = ctx.nodes();
 
@@ -354,7 +356,7 @@ impl Rule for RulesOfHooks {
                 //         useState(0);
                 //     }
                 // }
-                if ident.is_some_and(|name| !is_react_component_or_hook_name(&name)) {
+                if ident.is_some_and(|name| !is_component_or_hook_property_name(&name)) {
                     return ctx.diagnostic(diagnostics::function_error(
                         call.callee.span(),
                         *span,
@@ -381,7 +383,7 @@ impl Rule for RulesOfHooks {
                 }
 
                 if get_declaration_identifier(nodes, parent_func.id())
-                    .is_some_and(|name| !is_react_component_or_hook_name(&name))
+                    .is_some_and(|name| !is_component_or_hook_property_name(&name))
                 {
                     return ctx.diagnostic(diagnostics::function_error(
                         call.callee.span(),
@@ -859,6 +861,7 @@ fn is_effect_or_effect_event_call(
         || is_react_function_call(call, "useEffectEvent")
         || additional_effect_hooks.is_some_and(|regex| {
             call.callee_name()
+                .and_then(oxc_str::JSStr::as_str)
                 .is_some_and(|name| is_react_function_call(call, name) && regex.is_match(name))
         })
 }
@@ -896,7 +899,7 @@ fn is_somewhere_inside_component_or_hook(nodes: &AstNodes, node_id: NodeId) -> b
             (
                 node.id(),
                 match node.kind() {
-                    AstKind::Function(func) => func.name().map(Cow::from),
+                    AstKind::Function(func) => func.name().map(StaticName::from),
                     AstKind::ArrowFunctionExpression(_) => {
                         get_declaration_identifier(nodes, node.id())
                     }
@@ -905,7 +908,7 @@ fn is_somewhere_inside_component_or_hook(nodes: &AstNodes, node_id: NodeId) -> b
             )
         })
         .any(|(id, ident)| {
-            ident.is_some_and(|name| is_react_component_or_hook_name(&name))
+            ident.is_some_and(|name| is_component_or_hook_property_name(&name))
                 || is_memo_or_forward_ref_callback(nodes, id)
         })
 }
@@ -917,7 +920,7 @@ fn is_directly_inside_component_or_hook(nodes: &AstNodes, node_id: NodeId) -> bo
             func.name().is_some_and(|name| is_react_component_or_hook_name(name.as_str()))
         }
         AstKind::ArrowFunctionExpression(_) => get_declaration_identifier(nodes, node_id)
-            .is_some_and(|name| is_react_component_or_hook_name(&name)),
+            .is_some_and(|name| is_component_or_hook_property_name(&name)),
         _ => unreachable!(),
     };
 
@@ -927,7 +930,7 @@ fn is_directly_inside_component_or_hook(nodes: &AstNodes, node_id: NodeId) -> bo
 fn get_declaration_identifier<'a>(
     nodes: &'a AstNodes<'a>,
     node_id: NodeId,
-) -> Option<Cow<'a, str>> {
+) -> Option<StaticName<'a>> {
     let node = nodes.get_node(node_id);
 
     match node.kind() {
@@ -937,12 +940,12 @@ fn get_declaration_identifier<'a>(
             //
             // Function declaration or function expression names win over any
             // assignment statements or other renames.
-            Some(Cow::Borrowed(id.name.as_str()))
+            Some(StaticName::from(id.name))
         }
         AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => {
             match nodes.parent_kind(node_id) {
                 AstKind::VariableDeclarator(decl) => {
-                    decl.id.get_identifier_name().map(|id| Cow::Borrowed(id.as_str()))
+                    decl.id.get_identifier_name().map(StaticName::from)
                 }
                 // useHook = () => {};
                 AstKind::AssignmentExpression(expr)
@@ -953,13 +956,11 @@ fn get_declaration_identifier<'a>(
                 // const {useHook = () => {}} = {};
                 // ({useHook = () => {}} = {});
                 AstKind::AssignmentPattern(patt) => {
-                    patt.left.get_identifier_name().map(|id| Cow::Borrowed(id.as_str()))
+                    patt.left.get_identifier_name().map(StaticName::from)
                 }
                 // { useHook: () => {} }
                 // { useHook() {} }
-                AstKind::ObjectProperty(prop) => {
-                    prop.key.name().and_then(oxc_ast::StaticName::into_utf8)
-                }
+                AstKind::ObjectProperty(prop) => prop.key.name(),
                 _ => None,
             }
         }
@@ -972,7 +973,9 @@ fn get_declaration_identifier<'a>(
 fn is_memo_or_forward_ref_callback(nodes: &AstNodes, node_id: NodeId) -> bool {
     nodes.ancestors(node_id).any(|node| {
         if let AstKind::CallExpression(call) = node.kind() {
-            call.callee_name().is_some_and(|name| matches!(name, "forwardRef" | "memo"))
+            call.callee_name()
+                .and_then(oxc_str::JSStr::as_str)
+                .is_some_and(|name| matches!(name, "forwardRef" | "memo"))
         } else {
             false
         }
@@ -2660,4 +2663,27 @@ fn test() {
             .collect::<Vec<_>>(),
     )
     .test_and_snapshot();
+}
+
+fn is_component_or_hook_property_name(name: &StaticName<'_>) -> bool {
+    let name = name.as_js_str();
+    name.chars().next().and_then(oxc_str::JSChar::to_char).is_some_and(|ch| ch.is_ascii_uppercase())
+        || (name.starts_with("use")
+            && name.chars().nth(3).is_none_or(|ch| {
+                ch.to_char().is_some_and(|ch| ch.is_uppercase() || ch.is_ascii_digit())
+            }))
+}
+
+#[test]
+fn test_jsstr_assigned_hook_names() {
+    use crate::tester::Tester;
+
+    let pass = vec![
+        r#"obj["useHook"] = () => { useState(); };"#,
+        r#"obj["useHook\uD800"] = () => { useState(); };"#,
+        r#"obj["useHook\uD801"] = () => { useState(); };"#,
+        r#"obj["useHook\uDC00"] = () => { useState(); };"#,
+        r#"obj["useHook\uD800\uDC00"] = () => { useState(); };"#,
+    ];
+    Tester::new(RulesOfHooks::NAME, RulesOfHooks::PLUGIN, pass, vec![]).test();
 }

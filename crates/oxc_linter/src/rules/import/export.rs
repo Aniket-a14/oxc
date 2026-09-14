@@ -14,7 +14,7 @@ use crate::{
     rule::Rule,
 };
 
-fn no_named_export(module_name: &str, span: Span) -> OxcDiagnostic {
+fn no_named_export(module_name: impl std::fmt::Display, span: Span) -> OxcDiagnostic {
     OxcDiagnostic::warn(format!("No named exports found in module '{module_name}'"))
         .with_help("Remove the `export *` re-export, or add named exports to the target module.")
         .with_label(span)
@@ -84,7 +84,7 @@ impl Rule for Export {
             walk_exported_recursive(&remote_module_record, &mut export_names, &mut visited);
 
             if export_names.is_empty() {
-                ctx.diagnostic(no_named_export(module_request.name(), module_request.span));
+                ctx.diagnostic(no_named_export(&module_request.name, module_request.span));
             } else {
                 all_export_names.insert(star_export_entry.span, export_names);
             }

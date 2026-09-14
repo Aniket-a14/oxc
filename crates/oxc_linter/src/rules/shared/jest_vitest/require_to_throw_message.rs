@@ -65,7 +65,7 @@ pub fn run_on_jest_node<'a, 'c>(
         return;
     };
 
-    let Some(matcher_name) = matcher.name() else {
+    let Some(matcher_name) = matcher.name().and_then(oxc_str::JSStr::as_str) else {
         return;
     };
 
@@ -75,6 +75,6 @@ pub fn run_on_jest_node<'a, 'c>(
         && (matcher_name == "toThrow" || matcher_name == "toThrowError")
         && !has_not
     {
-        ctx.diagnostic(require_to_throw_message_diagnostic(&matcher_name, matcher.span));
+        ctx.diagnostic(require_to_throw_message_diagnostic(matcher_name, matcher.span));
     }
 }

@@ -143,11 +143,11 @@ fn build_code<'a>(
     content.print_str(call_span_end);
     content.print_ascii_byte(b'.');
     for modifier in expect_call.modifiers() {
-        let Some(modifier_name) = modifier.name() else {
+        let Some(modifier_name) = modifier.name().and_then(oxc_str::JSStr::as_str) else {
             continue;
         };
         if modifier_name != "not" {
-            content.print_str(&modifier_name);
+            content.print_str(modifier_name);
             content.print_ascii_byte(b'.');
         }
     }

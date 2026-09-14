@@ -1,0 +1,12 @@
+<X value="&#xD800;" />;
+<X value="&#xDC00;" />;
+<X value="&#xDBFF;" />;
+<X value="&#xDFFF;" />;
+<X value="before π&#xDABC;😀 after" />;
+<X value="&amp;&#xD800;&quot;" />;
+<X value='"&#xD800;"' />;
+<X value="'&#xD800;'" />;
+<X value='"&apos;&#xD800;&apos;"' />;
+<X value="&#xDC00;&#xD800;" />;
+<X value="\uD800&#xD800;
+" />;

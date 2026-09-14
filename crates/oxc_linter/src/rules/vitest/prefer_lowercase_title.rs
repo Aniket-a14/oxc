@@ -444,3 +444,30 @@ fn test() {
         .expect_fix(fix)
         .test_and_snapshot();
 }
+
+#[test]
+fn test_jsstr_consumers() {
+    use crate::{rule::RuleMeta, tester::Tester};
+    let pass = vec![
+        (r#"test("lower\uD800", () => {});"#, None),
+        (r#"test("\uDC00Upper", () => {});"#, None),
+        (
+            r#"test("Upper\uD800", () => {});"#,
+            Some(serde_json::json!([{"allowedPrefixes":["Upper"]}])),
+        ),
+    ];
+    let fail = vec![
+        (r#"test("Upper\uD800", () => {});"#, None),
+        (r"test(`Upper\uDC00`, () => {});", None),
+        (
+            r#"test("\uD800Upper", () => {});"#,
+            Some(serde_json::json!([{"lowercaseFirstCharacterOnly":false}])),
+        ),
+    ];
+    Tester::new(PreferLowercaseTitle::NAME, PreferLowercaseTitle::PLUGIN, pass, fail)
+        .expect_fix(vec![(
+            r#"test("Upper\uD800", () => {});"#,
+            r#"test("upper\ud800", () => {});"#,
+        )])
+        .test();
+}

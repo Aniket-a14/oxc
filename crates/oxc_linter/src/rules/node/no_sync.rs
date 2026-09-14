@@ -2,11 +2,11 @@ use rustc_hash::FxHashSet;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use oxc_ast::{AstKind, ast::Expression};
+use oxc_ast::{AstKind, StaticName, ast::Expression};
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_span::Span;
-use oxc_str::CompactStr;
+use oxc_str::{CompactStr, JSStr};
 
 use crate::{
     AstNode,
@@ -15,7 +15,8 @@ use crate::{
     rule::{DefaultRuleConfig, Rule},
 };
 
-fn no_sync_diagnostic(span: Span, property_name: &str) -> OxcDiagnostic {
+fn no_sync_diagnostic(span: Span, property_name: JSStr<'_>) -> OxcDiagnostic {
+    let property_name = StaticName::from(property_name);
     OxcDiagnostic::warn(format!("Unexpected sync method: '{property_name}'.")).with_label(span)
 }
 
@@ -85,7 +86,7 @@ impl Rule for NoSync {
             return;
         };
 
-        if self.0.ignores.contains(property_name) {
+        if property_name.as_str().is_some_and(|name| self.0.ignores.contains(name)) {
             return;
         }
 
@@ -97,23 +98,21 @@ impl Rule for NoSync {
     }
 }
 
-fn get_sync_property_name<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
+fn get_sync_property_name<'a>(expr: &Expression<'a>) -> Option<JSStr<'a>> {
     match expr.get_inner_expression() {
-        Expression::Identifier(ident) if ident.name.as_str().ends_with("Sync") => {
-            Some(ident.name.as_str())
-        }
+        Expression::Identifier(ident) if ident.name.ends_with("Sync") => Some(ident.name.into()),
         Expression::StaticMemberExpression(member) => {
-            if member.property.name.as_str().ends_with("Sync") {
-                Some(member.property.name.as_str())
+            if member.property.name.ends_with("Sync") {
+                Some(member.property.name.into())
             } else {
                 get_sync_property_name(&member.object)
             }
         }
         Expression::ComputedMemberExpression(member) => {
             if let Some(name) = member.static_property_name()
-                && name.as_str().ends_with("Sync")
+                && name.ends_with("Sync")
             {
-                return Some(name.as_str());
+                return Some(name);
             }
             get_sync_property_name(&member.object)
         }
@@ -160,4 +159,26 @@ fn test() {
     ];
 
     Tester::new(NoSync::NAME, NoSync::PLUGIN, pass, fail).test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr_suffix() {
+    use crate::tester::Tester;
+
+    let mut pass = Vec::new();
+    let mut fail = Vec::new();
+    for key in [
+        "normal",
+        r"\uD800",
+        r"\ud800",
+        r"\uD801",
+        r"\uDC00",
+        r"\uD800\uDC00",
+        r"before\uD800after",
+    ] {
+        pass.push(format!(r#"fs["{key}Async"]();"#));
+        fail.push(format!(r#"fs["{key}Sync"]();"#));
+        fail.push(format!(r#"fs["{key}Sync"].apply(null);"#));
+    }
+    Tester::new(NoSync::NAME, NoSync::PLUGIN, pass, fail).test();
 }

@@ -1,4 +1,4 @@
-use lazy_regex::{Lazy, Regex, lazy_regex};
+use lazy_regex::{BytesRegex, Lazy};
 use rustc_hash::FxHashMap;
 use schemars::{
     JsonSchema, SchemaGenerator,
@@ -27,9 +27,11 @@ fn jsx_no_script_url_diagnostic(span: Span) -> OxcDiagnostic {
         .with_label(span)
 }
 
-static JS_SCRIPT_REGEX: Lazy<Regex> = lazy_regex!(
+static JS_SCRIPT_REGEX: Lazy<BytesRegex> = Lazy::new(|| {
+    BytesRegex::new(
     r"(j|J)[\r\n\t]*(a|A)[\r\n\t]*(v|V)[\r\n\t]*(a|A)[\r\n\t]*(s|S)[\r\n\t]*(c|C)[\r\n\t]*(r|R)[\r\n\t]*(i|I)[\r\n\t]*(p|P)[\r\n\t]*(t|T)[\r\n\t]*:"
-);
+).unwrap()
+});
 
 #[derive(Debug, Default, Clone)]
 pub struct JsxNoScriptUrl(Box<JsxNoScriptUrlConfig>);
@@ -192,7 +194,7 @@ impl Rule for JsxNoScriptUrl {
                         };
                         if prop_value.as_string_literal().is_some_and(|val| {
                             link_props.contains(&attr.name.get_identifier().name.to_string())
-                                && JS_SCRIPT_REGEX.captures(&val.value).is_some()
+                                && JS_SCRIPT_REGEX.is_match(val.value.as_wtf8())
                         }) {
                             ctx.diagnostic(jsx_no_script_url_diagnostic(attr.span()));
                         }
@@ -209,7 +211,7 @@ impl Rule for JsxNoScriptUrl {
                                 component_name.as_str(),
                                 attr.name.get_identifier().name.to_string(),
                                 ctx,
-                            ) && JS_SCRIPT_REGEX.captures(&val.value).is_some()
+                            ) && JS_SCRIPT_REGEX.is_match(val.value.as_wtf8())
                         }) {
                             ctx.diagnostic(jsx_no_script_url_diagnostic(attr.span()));
                         }

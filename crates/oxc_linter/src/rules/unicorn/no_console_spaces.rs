@@ -2,6 +2,7 @@ use oxc_ast::{AstKind, ast::Expression};
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_span::{GetSpan, Span};
+use oxc_str::JSStr;
 
 use crate::{
     AstNode,
@@ -74,11 +75,7 @@ impl Rule for NoConsoleSpaces {
         for (i, arg) in call_expr.arguments.iter().enumerate() {
             if let Some(expression_arg) = arg.as_expression() {
                 let (literal_raw, is_template_lit) = match expression_arg {
-                    Expression::StringLiteral(string_lit) => {
-                        let literal_raw = string_lit.value.as_str();
-
-                        (literal_raw, false)
-                    }
+                    Expression::StringLiteral(string_lit) => (string_lit.value, false),
                     Expression::TemplateLiteral(string_lit) => {
                         let literal_raw = string_lit
                             .span
@@ -86,7 +83,7 @@ impl Rule for NoConsoleSpaces {
                             .trim_start_matches('`')
                             .trim_end_matches('`');
 
-                        (literal_raw, true)
+                        (JSStr::from(literal_raw), true)
                     }
 
                     _ => continue,
@@ -118,11 +115,11 @@ impl Rule for NoConsoleSpaces {
     }
 }
 
-fn check_literal_leading(i: usize, literal: &str) -> bool {
-    i != 0 && literal.starts_with(' ')
+fn check_literal_leading(i: usize, literal: JSStr<'_>) -> bool {
+    i != 0 && literal.starts_with(" ")
 }
-fn check_literal_trailing(i: usize, literal: &str, call_expr_arg_len: usize) -> bool {
-    i != call_expr_arg_len - 1 && literal.ends_with(' ')
+fn check_literal_trailing(i: usize, literal: JSStr<'_>, call_expr_arg_len: usize) -> bool {
+    i != call_expr_arg_len - 1 && literal.ends_with(" ")
 }
 fn report_diagnostic<'a>(
     direction: &'static str,
@@ -150,6 +147,8 @@ fn test() {
     use crate::tester::Tester;
 
     let pass = vec![
+        r#"console.log("\uD800", "x")"#,
+        r#"console.log("\uDC00", "x")"#,
         "console.log(\"abc\");",
         "console.log(\"abc\", \"def\");",
         "console.log('abc', \"def\");",
@@ -195,6 +194,10 @@ fn test() {
     ];
 
     let fail = vec![
+        r#"console.log("\uD800 ", "x")"#,
+        r#"console.log("\uDC00 ", "x")"#,
+        r#"console.log("\uD800\uDC00 ", "x")"#,
+        r#"console.log("x", " \uD800")"#,
         "console.log(\"abc \", \"def\");",
         "console.log(\"abc\", \" def\");",
         "console.log(\" abc \", \"def\");",

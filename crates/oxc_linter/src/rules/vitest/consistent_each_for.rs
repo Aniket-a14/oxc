@@ -219,15 +219,15 @@ impl ConsistentEachFor {
             return;
         };
 
-        let Some(method_name) = last_method.name() else {
+        let Some(method_name) = last_method.name().and_then(oxc_str::JSStr::as_str) else {
             return;
         };
 
-        if member_to_check.not_allowed_method(method_name.as_ref()) {
+        if member_to_check.not_allowed_method(method_name) {
             ctx.diagnostic(consistent_each_for_diagnostic(
                 last_method.span,
                 jest_fn_call.name.as_ref(),
-                method_name.as_ref(),
+                method_name,
                 &member_to_check.allowed_method_from_disallowed_method(),
             ));
         }

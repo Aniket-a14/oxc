@@ -1,6 +1,6 @@
 use fast_glob::glob_match;
 use oxc_ast::{
-    AstKind,
+    AstKind, StaticName,
     ast::{
         Argument, ArrowFunctionExpression, CallExpression, Class, Function, JSXAttributeName,
         JSXExpression, JSXExpressionContainer,
@@ -19,8 +19,7 @@ use crate::{
     rule::{DefaultRuleConfig, Rule},
     utils::{
         arrow_function_body_contains_jsx, expression_contains_jsx, function_contains_jsx,
-        is_create_element_call, is_es6_component, is_hoc_call, is_react_component_name,
-        is_react_hook,
+        is_create_element_call, is_es6_component, is_hoc_call, is_react_hook,
     },
 };
 
@@ -315,7 +314,7 @@ fn find_parent_component_name(
 
                 if let Some(name) = function_name(func, ancestor, ctx) {
                     if is_react_component_name(&name) {
-                        return Some(ParentComponentName::Named(name));
+                        return Some(ParentComponentName::Named(name.to_string()));
                     }
                     continue;
                 }
@@ -333,7 +332,7 @@ fn find_parent_component_name(
 
                 if let Some(name) = function_like_name(ancestor, ctx) {
                     if is_react_component_name(&name) {
-                        return Some(ParentComponentName::Named(name));
+                        return Some(ParentComponentName::Named(name.to_string()));
                     }
                     continue;
                 }
@@ -347,7 +346,7 @@ fn find_parent_component_name(
                     && let Some(name) = class_name(class, ancestor, ctx)
                     && is_react_component_name(&name)
                 {
-                    return Some(ParentComponentName::Named(name));
+                    return Some(ParentComponentName::Named(name.to_string()));
                 }
             }
             AstKind::CallExpression(call) => {
@@ -359,13 +358,13 @@ fn find_parent_component_name(
                 if let Some(name) = function_like_name(ancestor, ctx)
                     && is_react_component_name(&name)
                 {
-                    return Some(ParentComponentName::Named(name));
+                    return Some(ParentComponentName::Named(name.to_string()));
                 }
 
                 if let Some(name) = hoc_first_argument_name(call)
                     && is_react_component_name(&name)
                 {
-                    return Some(ParentComponentName::Named(name));
+                    return Some(ParentComponentName::Named(name.to_string()));
                 }
 
                 return Some(ParentComponentName::Anonymous);
@@ -376,39 +375,41 @@ fn find_parent_component_name(
     None
 }
 
-fn function_name(func: &Function<'_>, node: &AstNode<'_>, ctx: &LintContext<'_>) -> Option<String> {
-    func.name().map(|name| name.to_string()).or_else(|| function_like_name(node, ctx))
+fn function_name<'a>(
+    func: &Function<'a>,
+    node: &AstNode<'a>,
+    ctx: &LintContext<'a>,
+) -> Option<StaticName<'a>> {
+    func.name().map(StaticName::from).or_else(|| function_like_name(node, ctx))
 }
 
-fn function_like_name(node: &AstNode<'_>, ctx: &LintContext<'_>) -> Option<String> {
+fn function_like_name<'a>(node: &AstNode<'a>, ctx: &LintContext<'a>) -> Option<StaticName<'a>> {
     let parent = ctx.nodes().parent_node(node.id());
     match parent.kind() {
-        AstKind::VariableDeclarator(decl) => {
-            decl.id.get_identifier_name().map(|name| name.to_string())
-        }
-        AstKind::ObjectProperty(prop) => prop
-            .key
-            .static_name()
-            .and_then(oxc_ast::StaticName::into_utf8)
-            .map(std::borrow::Cow::into_owned),
+        AstKind::VariableDeclarator(decl) => decl.id.get_identifier_name().map(StaticName::from),
+        AstKind::ObjectProperty(prop) => prop.key.static_name(),
         AstKind::AssignmentExpression(assign) => {
-            assign.left.get_identifier_name().map(ToString::to_string)
+            assign.left.get_identifier_name().map(StaticName::from)
         }
         _ => None,
     }
 }
 
-fn hoc_first_argument_name(call: &CallExpression<'_>) -> Option<String> {
+fn hoc_first_argument_name<'a>(call: &CallExpression<'a>) -> Option<StaticName<'a>> {
     let first_arg = call.arguments.first()?;
     match first_arg {
-        Argument::FunctionExpression(func) => func.name().map(|name| name.to_string()),
+        Argument::FunctionExpression(func) => func.name().map(StaticName::from),
         Argument::CallExpression(call) => hoc_first_argument_name(call),
         _ => None,
     }
 }
 
-fn class_name(class: &Class<'_>, node: &AstNode<'_>, ctx: &LintContext<'_>) -> Option<String> {
-    class.name().map(|name| name.to_string()).or_else(|| function_like_name(node, ctx))
+fn class_name<'a>(
+    class: &Class<'a>,
+    node: &AstNode<'a>,
+    ctx: &LintContext<'a>,
+) -> Option<StaticName<'a>> {
+    class.name().map(StaticName::from).or_else(|| function_like_name(node, ctx))
 }
 
 fn is_anonymous_default_export(node: &AstNode<'_>, ctx: &LintContext<'_>) -> bool {
@@ -471,13 +472,13 @@ fn is_inside_create_element_props_object(node: &AstNode<'_>, ctx: &LintContext<'
     false
 }
 
-fn is_allowed_render_prop(node: &AstNode<'_>, ctx: &LintContext<'_>, pattern: &str) -> bool {
+fn is_allowed_render_prop<'a>(node: &AstNode<'a>, ctx: &LintContext<'a>, pattern: &str) -> bool {
     if is_direct_jsx_child_render_prop(node, ctx) {
         return true;
     }
 
     if let Some(prop_name) = direct_object_property_name(node, ctx)
-        && (prop_name == "children" || glob_match(pattern, &prop_name))
+        && (prop_name == "children" || glob_match(pattern, prop_name.as_js_str().as_wtf8()))
     {
         return true;
     }
@@ -509,15 +510,15 @@ fn nearest_jsx_attribute_name(node: &AstNode<'_>, ctx: &LintContext<'_>) -> Opti
     None
 }
 
-fn direct_object_property_name(node: &AstNode<'_>, ctx: &LintContext<'_>) -> Option<String> {
+fn direct_object_property_name<'a>(
+    node: &AstNode<'a>,
+    ctx: &LintContext<'a>,
+) -> Option<StaticName<'a>> {
     let parent = ctx.nodes().parent_node(node.id());
     let AstKind::ObjectProperty(prop) = parent.kind() else {
         return None;
     };
-    prop.key
-        .static_name()
-        .and_then(oxc_ast::StaticName::into_utf8)
-        .map(std::borrow::Cow::into_owned)
+    prop.key.static_name()
 }
 
 fn is_direct_jsx_child_render_prop(node: &AstNode<'_>, ctx: &LintContext<'_>) -> bool {
@@ -552,6 +553,7 @@ fn is_map_callback(node: &AstNode<'_>, ctx: &LintContext<'_>) -> bool {
         .callee
         .as_member_expression()
         .and_then(oxc_ast::ast::MemberExpression::static_property_name)
+        .and_then(oxc_str::JSStr::as_str)
         != Some("map")
     {
         return false;
@@ -585,7 +587,7 @@ fn is_first_argument_of_hoc_call(node: &AstNode<'_>, ctx: &LintContext<'_>) -> b
 }
 
 fn is_hoc_component_call(call: &CallExpression<'_>, ctx: &LintContext<'_>) -> bool {
-    call.callee_name().is_some_and(|name| is_hoc_call(name, ctx))
+    call.callee_name().and_then(oxc_str::JSStr::as_str).is_some_and(|name| is_hoc_call(name, ctx))
         && call.arguments.first().is_some_and(|arg| argument_contains_jsx(arg, ctx))
 }
 
@@ -1912,4 +1914,12 @@ fn test() {
 
     Tester::new(NoUnstableNestedComponents::NAME, NoUnstableNestedComponents::PLUGIN, pass, fail)
         .test_and_snapshot();
+}
+
+fn is_react_component_name(name: &StaticName<'_>) -> bool {
+    name.as_js_str()
+        .chars()
+        .next()
+        .and_then(oxc_str::JSChar::to_char)
+        .is_some_and(|ch| ch.is_ascii_uppercase())
 }

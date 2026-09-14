@@ -1,7 +1,7 @@
-use std::{borrow::Cow, ops::Deref};
+use std::ops::Deref;
 
 use oxc_allocator::{Address, ArenaVec, UnstableAddress};
-use oxc_ast::{AstKind, ast::*};
+use oxc_ast::{AstKind, StaticName, ast::*};
 use oxc_ast_visit::{
     VisitJs,
     walk_js::{self, walk_expression},
@@ -312,10 +312,10 @@ impl Fn<'_> {
 ///
 /// Used so that diagnostics can point at, and refer to, that name rather than the anonymous
 /// function expression itself, and so the name can be checked against the `allowedNames` option.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct TargetSymbol<'a> {
     span: Span,
-    name: &'a str,
+    name: StaticName<'a>,
     kind: TargetSymbolKind,
 }
 
@@ -364,7 +364,7 @@ impl<'a, 'c> ExplicitTypesChecker<'a, 'c> {
         if let Some(id) = binding {
             self.target_symbol = Some(TargetSymbol {
                 span: id.span,
-                name: id.name.as_str(),
+                name: id.name.into(),
                 kind: TargetSymbolKind::Binding,
             });
             true
@@ -377,8 +377,7 @@ impl<'a, 'c> ExplicitTypesChecker<'a, 'c> {
         let Some(id) = prop else {
             return false;
         };
-        if let Some(Cow::Borrowed(name)) = id.static_name().and_then(oxc_ast::StaticName::into_utf8)
-        {
+        if let Some(name) = id.static_name() {
             self.target_symbol =
                 Some(TargetSymbol { span: id.span(), name, kind: TargetSymbolKind::Property });
             true
@@ -398,12 +397,11 @@ impl<'a, 'c> ExplicitTypesChecker<'a, 'c> {
         debug_assert!(func.return_type.is_none());
 
         let target = self.target_symbol.as_ref();
-        let target_name = target.map(|t| t.name);
+        let target_name = target.and_then(|t| t.name.as_str());
         #[expect(clippy::cast_possible_truncation)]
         let span = target.map_or(Span::sized(func.span.start, "function".len() as u32), |t| t.span);
-        let is_allowed = || {
-            self.rule.is_some_allowed_name(func.name().map(|name| name.as_str()).or(target_name))
-        };
+        let is_allowed =
+            self.rule.is_some_allowed_name(func.name().map(|name| name.as_str()).or(target_name));
 
         if self.rule.allow_overload_functions && self.function_has_overload_signatures(func) {
             return;
@@ -414,7 +412,7 @@ impl<'a, 'c> ExplicitTypesChecker<'a, 'c> {
         }
 
         if !self.rule.allow_higher_order_functions {
-            if !is_allowed() {
+            if !is_allowed {
                 self.ctx.diagnostic(func_missing_return_type(span));
             }
             return;
@@ -427,7 +425,7 @@ impl<'a, 'c> ExplicitTypesChecker<'a, 'c> {
 
         // AST is immutable in linter, so `unstable_address` produces stable `Address`es
         let is_hof = self.is_higher_order_function(func.unstable_address());
-        if !is_hof && !is_allowed() {
+        if !is_hof && !is_allowed {
             self.ctx.diagnostic(func_missing_return_type(span));
         }
     }
@@ -479,13 +477,11 @@ impl<'a, 'c> ExplicitTypesChecker<'a, 'c> {
             let ClassElement::MethodDefinition(method) = element else {
                 continue;
             };
-            let Some(method_name) =
-                method.key.static_name().and_then(oxc_ast::StaticName::into_utf8)
-            else {
+            let Some(method_name) = method.key.static_name() else {
                 continue;
             };
             if method.value.is_typescript_syntax() {
-                overload_keys.insert((method.r#static, CompactStr::from(method_name.as_ref())));
+                overload_keys.insert((method.r#static, method_name));
             }
         }
 
@@ -496,12 +492,10 @@ impl<'a, 'c> ExplicitTypesChecker<'a, 'c> {
             if method.value.is_typescript_syntax() {
                 continue;
             }
-            let Some(method_name) =
-                method.key.static_name().and_then(oxc_ast::StaticName::into_utf8)
-            else {
+            let Some(method_name) = method.key.static_name() else {
                 continue;
             };
-            if overload_keys.contains(&(method.r#static, CompactStr::from(method_name.as_ref()))) {
+            if overload_keys.contains(&(method.r#static, method_name)) {
                 self.overloaded_methods.insert(method.span);
             }
         }
@@ -510,7 +504,7 @@ impl<'a, 'c> ExplicitTypesChecker<'a, 'c> {
     fn check_arrow_without_return(&mut self, arrow: &ArrowFunctionExpression<'a>) {
         debug_assert!(arrow.return_type.is_none());
         let target = self.target_symbol.as_ref();
-        let target_name = target.map(|t| t.name);
+        let target_name = target.and_then(|t| t.name.as_str());
         let span = match target {
             Some(TargetSymbol { span, kind: TargetSymbolKind::Property, .. }) => *span,
             // Match typescript-eslint's function-head location for the exported arrow itself.
@@ -528,10 +522,10 @@ impl<'a, 'c> ExplicitTypesChecker<'a, 'c> {
             Some(target) => target.span,
             None => arrow.params.span,
         };
-        let is_allowed = || self.rule.is_some_allowed_name(target_name);
+        let is_allowed = self.rule.is_some_allowed_name(target_name);
 
         if !self.rule.allow_higher_order_functions {
-            if !is_allowed() {
+            if !is_allowed {
                 self.ctx.diagnostic(func_missing_return_type(span));
             }
             return;
@@ -577,7 +571,7 @@ impl<'a, 'c> ExplicitTypesChecker<'a, 'c> {
 
             // AST is immutable in linter, so `unstable_address` produces stable `Address`es
             let is_hof = self.is_higher_order_function(arrow.unstable_address());
-            if !is_hof && !is_allowed() {
+            if !is_hof && !is_allowed {
                 self.ctx.diagnostic(func_missing_return_type(span));
             }
         }
@@ -728,8 +722,7 @@ impl<'a> VisitJs<'a> for ExplicitTypesChecker<'a, '_> {
         {
             return;
         }
-        if self.rule.is_some_allowed_name(el.static_name().and_then(oxc_ast::StaticName::into_utf8))
-        {
+        if self.rule.is_some_allowed_name(el.static_name().and_then(StaticName::into_utf8)) {
             return;
         }
 

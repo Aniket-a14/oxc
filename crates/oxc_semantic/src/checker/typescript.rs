@@ -5,7 +5,7 @@ use rustc_hash::FxHashMap;
 
 use oxc_ast::{AstKind, ast::*};
 use oxc_ecmascript::BoundNames;
-use oxc_span::{GetSpan, Span};
+use oxc_span::{ContentEq, GetSpan, Span};
 use oxc_str::Str;
 
 use crate::{builder::SemanticBuilder, diagnostics};
@@ -228,7 +228,11 @@ pub fn check_class<'a>(class: &Class<'a>, ctx: &SemanticBuilder<'a>) {
                 let next_is_same = b.is_some_and(|b| {
                     matches!(b,
                         ClassElement::MethodDefinition(b)
-                            if b.key.static_name() == a.key.static_name()
+                            if match (a.key.static_name(), b.key.static_name()) {
+                                (Some(a), Some(b)) => a == b,
+                                (None, None) => a.key.content_eq(&b.key),
+                                _ => false,
+                            }
                     )
                 });
                 if next_is_same {

@@ -8,7 +8,7 @@ use oxc_diagnostics::OxcDiagnostic;
 use oxc_ecmascript::{ToBoolean, WithoutGlobalReferenceInformation};
 use oxc_macros::declare_oxc_lint;
 use oxc_span::Span;
-use oxc_str::CompactStr;
+use oxc_str::{CompactStr, JSStr};
 use oxc_syntax::operator::UnaryOperator;
 
 use crate::{
@@ -140,13 +140,15 @@ fn is_valid_value_for_aria_prop_type(
             let Some(value_string) = parse_aria_prop_value_as_string(value, true) else {
                 return false;
             };
-            matches!(value_string.as_str(), "true" | "false")
+            ["true", "false"].iter().any(|token| value_string.eq_ignore_ascii_case((*token).into()))
         }
         AriaPropType::Tristate => {
             let Some(value_string) = parse_aria_prop_value_as_string(value, true) else {
                 return false;
             };
-            matches!(value_string.as_str(), "true" | "false" | "mixed")
+            ["true", "false", "mixed"]
+                .iter()
+                .any(|token| value_string.eq_ignore_ascii_case((*token).into()))
         }
         AriaPropType::String | AriaPropType::Id => {
             // Template literals with expressions always produce strings at runtime
@@ -156,11 +158,12 @@ fn is_valid_value_for_aria_prop_type(
             {
                 return true;
             }
-            parse_aria_prop_value_as_string(value, false).is_some()
+            matches!(value, JSXAttributeValue::StringLiteral(_))
+                || matches!(value, JSXAttributeValue::ExpressionContainer(container) if matches!(container.expression, JSXExpression::StringLiteral(_) | JSXExpression::TemplateLiteral(_)))
         }
         AriaPropType::Integer | AriaPropType::Number => {
             if let Some(value_string) = parse_aria_prop_value_as_string(value, false) {
-                return value_string.parse::<f64>().is_ok();
+                return value_string.as_str().is_some_and(|value| value.parse::<f64>().is_ok());
             }
             match value {
                 JSXAttributeValue::ExpressionContainer(container) => {
@@ -189,7 +192,9 @@ fn is_valid_value_for_aria_prop_type(
             let Some(value_string) = parse_aria_prop_value_as_string(value, true) else {
                 return false;
             };
-            valid_tokens.iter().any(|valid_token| valid_token == &value_string)
+            valid_tokens
+                .iter()
+                .any(|valid_token| value_string.eq_ignore_ascii_case(valid_token.as_str().into()))
         }
         AriaPropType::TokenList(valid_tokens) => {
             let Some(value) = parse_aria_prop_value_as_string(value, true) else {
@@ -198,7 +203,10 @@ fn is_valid_value_for_aria_prop_type(
             // Each token must be in valid_tokens
             let mut count = 0;
             for token in value.split_whitespace() {
-                if !valid_tokens.iter().any(|valid_token| valid_token == token) {
+                if !valid_tokens
+                    .iter()
+                    .any(|valid_token| token.eq_ignore_ascii_case(valid_token.as_str().into()))
+                {
                     return false;
                 }
                 count += 1;
@@ -208,24 +216,18 @@ fn is_valid_value_for_aria_prop_type(
     }
 }
 
-fn parse_aria_prop_value_as_string(
-    value: &JSXAttributeValue,
+fn parse_aria_prop_value_as_string<'a>(
+    value: &JSXAttributeValue<'a>,
     boolean_as_string: bool, // whether to convert boolean literal to string
-) -> Option<CompactStr> {
+) -> Option<JSStr<'a>> {
     match value {
-        JSXAttributeValue::StringLiteral(string_lit) => {
-            Some(string_lit.value.cow_to_lowercase().into())
-        }
+        JSXAttributeValue::StringLiteral(string_lit) => Some(string_lit.value),
         JSXAttributeValue::ExpressionContainer(container) => match &container.expression {
-            JSXExpression::StringLiteral(string_lit) => {
-                Some(string_lit.value.cow_to_lowercase().into())
-            }
-            JSXExpression::TemplateLiteral(template_lit) => {
-                Some(template_lit.single_quasi()?.cow_to_lowercase().into())
-            }
+            JSXExpression::StringLiteral(string_lit) => Some(string_lit.value),
+            JSXExpression::TemplateLiteral(template_lit) => template_lit.single_quasi(),
             JSXExpression::BooleanLiteral(bool_lit) => {
                 if boolean_as_string {
-                    Some(bool_lit.value.to_string().into())
+                    Some(if bool_lit.value { "true" } else { "false" }.into())
                 } else {
                     None
                 }
@@ -234,7 +236,7 @@ fn parse_aria_prop_value_as_string(
                 if boolean_as_string && unary.operator == UnaryOperator::LogicalNot =>
             {
                 let value = !unary.argument.to_boolean(&WithoutGlobalReferenceInformation)?;
-                Some(value.to_string().into())
+                Some(if value { "true" } else { "false" }.into())
             }
             _ => None,
         },
@@ -585,4 +587,13 @@ fn test() {
     ];
 
     Tester::new(AriaProptypes::NAME, AriaProptypes::PLUGIN, pass, fail).test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr_consumers() {
+    use crate::{rule::RuleMeta, tester::Tester};
+    let pass =
+        vec![r#"<div aria-labelledby={"\uD800"} />"#, r#"<div aria-describedby={"id \uDC00"} />"#];
+    let fail = vec![r#"<div aria-hidden={"\uD800"} />"#, r#"<div aria-current={"page \uDC00"} />"#];
+    Tester::new(AriaProptypes::NAME, AriaProptypes::PLUGIN, pass, fail).test();
 }

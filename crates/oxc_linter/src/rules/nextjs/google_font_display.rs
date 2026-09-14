@@ -106,8 +106,11 @@ impl Rule for GoogleFontDisplay {
                 return;
             };
 
-            if matches!(display_value, "auto" | "block" | "fallback") {
-                ctx.diagnostic(not_recommended_font_display_value(href_prop.span(), display_value));
+            if let Some(value) = ["auto", "block", "fallback"]
+                .into_iter()
+                .find(|value| display_value == value.as_bytes())
+            {
+                ctx.diagnostic(not_recommended_font_display_value(href_prop.span(), value));
             }
         }
     }

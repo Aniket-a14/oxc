@@ -1,4 +1,5 @@
-use std::borrow::Cow;
+use cow_utils::CowUtils;
+use oxc_str::JSStr;
 
 use nodejs_built_in_modules::is_nodejs_builtin_module;
 use oxc_ast::{
@@ -22,7 +23,7 @@ use crate::{
 
 fn extension_should_not_be_included_in_diagnostic(
     span: Span,
-    extension: &str,
+    extension: impl std::fmt::Display,
     is_import: bool,
 ) -> OxcDiagnostic {
     let import_or_export = if is_import { "import" } else { "export" };
@@ -91,8 +92,8 @@ impl PathGroupOverride {
     ///
     /// Uses fast-glob pattern matching for flexible, performant matching.
     #[inline]
-    pub fn matches(&self, import_path: &str) -> bool {
-        fast_glob::glob_match(&self.pattern, import_path)
+    pub fn matches(&self, import_path: JSStr<'_>) -> bool {
+        fast_glob::glob_match(&self.pattern, import_path.as_wtf8())
     }
 
     /// Get the action to take for this override.
@@ -258,8 +259,8 @@ impl ExtensionsConfig {
     /// Returns `true` if the extension is configured, `false` if it should be ignored.
     /// This is used to implement "only check configured extensions" behavior.
     #[inline]
-    pub fn has_rule(&self, ext: &str) -> bool {
-        self.extensions.contains_key(ext)
+    pub fn has_rule(&self, ext: JSStr<'_>) -> bool {
+        self.get_rule(ext).is_some()
     }
 
     /// Get the configured rule for a specific file extension.
@@ -267,26 +268,33 @@ impl ExtensionsConfig {
     /// Returns the configured ExtensionRule if present, or None otherwise.
     /// This method is inlined for hot-path performance.
     #[inline]
-    pub fn get_rule(&self, ext: &str) -> Option<ExtensionRule> {
-        self.extensions.get(ext).copied()
+    pub fn get_rule(&self, ext: JSStr<'_>) -> Option<ExtensionRule> {
+        // Configured extension names are UTF-8. An unmatched name still uses the global rule.
+        let ext = ext.as_str()?.cow_to_ascii_lowercase();
+        self.extensions.get(ext.as_ref()).copied()
     }
 
     /// Check if an extension is configured to always require the extension.
     #[inline]
-    pub fn is_always(&self, ext: &str) -> bool {
+    pub fn is_always(&self, ext: JSStr<'_>) -> bool {
         matches!(self.get_rule(ext), Some(ExtensionRule::Always))
     }
 
     /// Check if an extension is configured to never allow the extension.
     #[inline]
-    pub fn is_never(&self, ext: &str) -> bool {
+    pub fn is_never(&self, ext: JSStr<'_>) -> bool {
         matches!(self.get_rule(ext), Some(ExtensionRule::Never))
     }
 
     /// Check if the extension is a standard JS/TS extension.
     #[inline]
-    pub fn is_standard_extension(ext: &str) -> bool {
-        matches!(ext, "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs" | "json")
+    pub fn is_standard_extension(ext: JSStr<'_>) -> bool {
+        ext.as_str().is_some_and(|ext| {
+            matches!(
+                ext.cow_to_ascii_lowercase().as_ref(),
+                "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs" | "json"
+            )
+        })
     }
 
     /// Check if any standard extension has a "never" rule configured.
@@ -295,13 +303,13 @@ impl ExtensionsConfig {
     pub fn has_any_never_rules(&self) -> bool {
         // Fast path: if global rule is Never, all extensions default to Never
         matches!(self.require_extension, Some(ExtensionRule::Never))
-            || self.is_never("js")
-            || self.is_never("jsx")
-            || self.is_never("ts")
-            || self.is_never("tsx")
-            || self.is_never("mjs")
-            || self.is_never("cjs")
-            || self.is_never("json")
+            || self.is_never("js".into())
+            || self.is_never("jsx".into())
+            || self.is_never("ts".into())
+            || self.is_never("tsx".into())
+            || self.is_never("mjs".into())
+            || self.is_never("cjs".into())
+            || self.is_never("json".into())
     }
 
     /// Check path group overrides for the given import path.
@@ -309,7 +317,7 @@ impl ExtensionsConfig {
     /// Returns the action to take if a pattern matches, or None if no patterns match.
     /// First matching pattern wins (precedence order).
     #[inline]
-    pub fn check_path_group_overrides(&self, import_path: &str) -> Option<PathGroupAction> {
+    pub fn check_path_group_overrides(&self, import_path: JSStr<'_>) -> Option<PathGroupAction> {
         self.path_group_overrides
             .iter()
             .find(|override_| override_.matches(import_path))
@@ -322,7 +330,7 @@ impl ExtensionsConfig {
     /// Per-extension rules override global rules (e.g., `{ "js": "never" }` overrides global "always").
     pub fn should_flag_extension(
         &self,
-        ext_str: &str,
+        ext_str: JSStr<'_>,
         extension_is_written: bool,
         has_resolved_extension: bool,
         require_extension: Option<ExtensionRule>,
@@ -554,9 +562,10 @@ impl Rule for Extensions {
         }
         for argument in &call_expr.arguments {
             if let Argument::StringLiteral(s) = argument {
+                let source = s.value;
                 self.process_import(
                     ctx,
-                    s.value.as_str(),
+                    source,
                     call_expr.span,
                     false, // require() is never a type import
                     true,  // treat require as import for diagnostics
@@ -571,7 +580,7 @@ impl Rule for Extensions {
             for module in modules {
                 self.process_import(
                     ctx,
-                    module_name.as_str(),
+                    module_name.as_js_str(),
                     module.statement_span,
                     module.is_type,
                     module.is_import,
@@ -587,19 +596,20 @@ impl Extensions {
         &self,
         ctx: &LintContext,
         resolved_extension: Option<&str>,
-        written_extension: Option<&str>,
+        written_extension: Option<JSStr<'_>>,
         span: Span,
         is_import: bool,
         require_extension: Option<ExtensionRule>,
     ) {
         let config = &self.0;
+        let resolved_extension = resolved_extension.map(JSStr::from);
 
         // Prefer the resolved extension, but honor an explicitly-written genuine extension that
         // differs from it: TS ESM `import './foo.js'` resolves to `./foo.ts`, yet `js: never`
         // must still flag the written `.js`. "Genuine" excludes compound-name parts like
         // `.stories` in `./foo.stories` (which resolves to `foo.stories.tsx`).
         let written_is_genuine_extension = written_extension.is_some_and(|written| {
-            resolved_extension != Some(written)
+            resolved_extension.is_none_or(|resolved| !resolved.eq_ignore_ascii_case(written))
                 && (ExtensionsConfig::is_standard_extension(written) || config.has_rule(written))
         });
 
@@ -629,7 +639,7 @@ impl Extensions {
                 true
             } else if let Some(resolved) = resolved_extension {
                 // If we have a resolved extension, check if it matches the written extension
-                written_extension == Some(resolved)
+                written_extension.is_some_and(|written| written.eq_ignore_ascii_case(resolved))
             } else {
                 // Otherwise, just check if there's any written extension
                 written_extension.is_some()
@@ -642,8 +652,16 @@ impl Extensions {
                 require_extension,
             ) {
                 if extension_is_written {
+                    let display = ext_str.as_str().map_or_else(
+                        || {
+                            std::borrow::Cow::Owned(
+                                oxc_ast::StaticName::Borrowed(ext_str).to_string(),
+                            )
+                        },
+                        cow_utils::CowUtils::cow_to_ascii_lowercase,
+                    );
                     ctx.diagnostic(extension_should_not_be_included_in_diagnostic(
-                        span, ext_str, is_import,
+                        span, display, is_import,
                     ));
                 } else {
                     ctx.diagnostic(extension_missing_diagnostic(span, is_import));
@@ -667,7 +685,7 @@ impl Extensions {
     fn process_import(
         &self,
         ctx: &LintContext,
-        module_name: &str,
+        module_name: JSStr<'_>,
         span: Span,
         is_type_import: bool,
         is_import: bool,
@@ -694,7 +712,10 @@ impl Extensions {
         }
 
         // Built-in Node modules are always skipped
-        if is_nodejs_builtin_module(module_name) || ctx.globals().is_enabled(module_name) {
+        if module_name
+            .as_str()
+            .is_some_and(|name| is_nodejs_builtin_module(name) || ctx.globals().is_enabled(name))
+        {
             return;
         }
 
@@ -725,7 +746,7 @@ impl Extensions {
         self.validate_extension(
             ctx,
             resolved_extension.as_deref(),
-            written_extension.as_deref(),
+            written_extension,
             span,
             is_import,
             config.require_extension,
@@ -747,7 +768,7 @@ impl Extensions {
 /// - Relative imports: `./foo`, `../bar`
 /// - Absolute paths: `/usr/local/lib`
 /// - Path aliases: `@/`, `~/`, `#/`
-fn is_root_package_import(module_name: &str) -> bool {
+fn is_root_package_import(module_name: JSStr<'_>) -> bool {
     // First check if it's a package at all
     if !is_package_import(module_name) {
         return false;
@@ -756,14 +777,14 @@ fn is_root_package_import(module_name: &str) -> bool {
     // For scoped packages (@scope/package), only count as root if there's exactly one '/'
     // @babel/core → root package (one '/')
     // @babel/core/lib/parser.js → subpath (more than one '/')
-    if module_name.starts_with('@') {
-        return module_name.matches('/').count() == 1;
+    if module_name.starts_with("@") {
+        return memchr::memchr_iter(b'/', module_name.as_wtf8()).take(2).count() == 1;
     }
 
     // For bare packages, only count as root if there's no '/'
     // lodash → root package (no '/')
     // lodash/fp → subpath (has '/')
-    !module_name.contains('/')
+    !module_name.contains("/")
 }
 
 /// Determines if an import specifier is a package import (not relative or path alias).
@@ -781,14 +802,14 @@ fn is_root_package_import(module_name: &str) -> bool {
 /// - Relative imports: `./foo`, `../bar`
 /// - Absolute paths: `/usr/local/lib`
 /// - Path aliases: `@/`, `~/`, `#/`
-fn is_package_import(module_name: &str) -> bool {
+fn is_package_import(module_name: JSStr<'_>) -> bool {
     // Relative imports: ./foo, ../bar, or directory imports (., ..)
-    if module_name.starts_with('.') {
+    if module_name.starts_with(".") {
         return false;
     }
 
     // Absolute paths: /foo
-    if module_name.starts_with('/') {
+    if module_name.starts_with("/") {
         return false;
     }
 
@@ -796,18 +817,18 @@ fn is_package_import(module_name: &str) -> bool {
     // - @/foo (path alias) → rest = "/foo" → starts with '/'
     // - @x/pkg (scoped package) → rest = "x/pkg" → doesn't start with '/'
     // - @babel/core (scoped package) → rest = "babel/core" → doesn't start with '/'
-    if let Some(rest) = module_name.strip_prefix('@') {
-        if rest.starts_with('/') {
+    if module_name.starts_with("@") {
+        if module_name.starts_with("@/") {
             return false; // Path alias: @/
         }
         // Scoped packages must have scope/package format
         // This includes single-letter scopes like @x/pkg
-        return rest.contains('/');
+        return module_name.contains("/");
     }
 
     // Other single-char path aliases: ~/, #/
     // Use slice pattern for single bounds check
-    if let [first, b'/', ..] = module_name.as_bytes()
+    if let [first, b'/', ..] = module_name.as_wtf8()
         && *first != b'.'
         && *first != b'@'
     {
@@ -822,26 +843,21 @@ fn is_package_import(module_name: &str) -> bool {
 /// Get the file extension from the import/export string specifier.
 ///
 /// This parses the extension from the written import statement text,
-/// handling query parameters and edge cases. Extensions are normalized
-/// to lowercase for case-insensitive matching.
+/// handling query parameters and edge cases. Preserve the spelling here;
+/// configuration lookup performs case-insensitive matching.
 ///
 /// # Examples
 /// - `"./foo.js"` → `Some("js")`
-/// - `"./foo.JS"` → `Some("js")` (normalized to lowercase)
+/// - `"./foo.JS"` → `Some("JS")`
 /// - `"./foo.js?v=123"` → `Some("js")` (query params stripped)
 /// - `"./foo"` → `None`
 /// - `"./foo."` → `None` (empty extension)
 /// - `"./foo.bar/"` → `None` (directory path)
-fn get_file_extension_from_module_name(module_name: &str) -> Option<Cow<'_, str>> {
-    use cow_utils::CowUtils;
-    let path = module_name.split_once('?').map_or(module_name, |(path, _)| path);
-    let file_name = path.rsplit_once('/').map_or(path, |(_, file_name)| file_name);
-    let (_, extension) = file_name.rsplit_once('.')?;
-    if extension.is_empty() {
-        return None;
-    }
-
-    Some(extension.cow_to_ascii_lowercase())
+fn get_file_extension_from_module_name(module_name: JSStr<'_>) -> Option<JSStr<'_>> {
+    let path = module_name.split_once("?").map_or(module_name, |(path, _)| path);
+    let file_name = path.rsplit_once("/").map_or(path, |(_, file_name)| file_name);
+    let (_, extension) = file_name.rsplit_once(".")?;
+    (!extension.is_empty()).then_some(extension)
 }
 
 /// Get the actual file extension from the resolved module path.
@@ -858,7 +874,7 @@ fn get_file_extension_from_module_name(module_name: &str) -> Option<Cow<'_, str>
 /// - Path alias `@/utils/foo.js` → `Some("js")` (if resolved)
 fn get_resolved_extension(
     module_record: &crate::module_record::ModuleRecord,
-    module_name: &str,
+    module_name: JSStr<'_>,
 ) -> Option<String> {
     use cow_utils::CowUtils;
     module_record.get_loaded_module(module_name).and_then(|loaded_module| {
@@ -1835,4 +1851,25 @@ fn test() {
     ];
 
     Tester::new(Extensions::NAME, Extensions::PLUGIN, pass, fail).test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr() {
+    use crate::tester::Tester;
+    let always = Some(serde_json::json!(["always"]));
+    let never = Some(serde_json::json!(["never"]));
+    let pass = vec![
+        (r#"import "./x\uD800.js";"#, always.clone()),
+        (r#"import "./x\uDC00.JS?query";"#, always.clone()),
+        (r#"import "./x\uD800";"#, never.clone()),
+    ];
+    let fail = vec![
+        (r#"import "./x\uD800";"#, always),
+        (r#"import "./x\uD800.js";"#, never.clone()),
+        (r#"import "./x\uDC00.JS?query";"#, never.clone()),
+        (r#"import "./x.\uD800";"#, never),
+    ];
+    Tester::new(Extensions::NAME, Extensions::PLUGIN, pass, fail)
+        .with_snapshot_suffix("jsstr")
+        .test_and_snapshot();
 }

@@ -1,4 +1,3 @@
-use cow_utils::CowUtils;
 use oxc_ast::{
     AstKind,
     ast::{JSXAttributeItem, JSXAttributeName, JSXAttributeValue},
@@ -110,7 +109,7 @@ impl Rule for NoUnwantedPolyfillio {
             return;
         };
 
-        let src_str = src_value.value.as_str();
+        let src_str = src_value.value;
 
         // Check for unsafe polyfill.io domains first
         // These domains were compromised in a supply chain attack in 2024
@@ -132,11 +131,21 @@ impl Rule for NoUnwantedPolyfillio {
                 return;
             };
 
-            // Replace URL encoded values
-            let features_value = features_value.cow_replace("%2C", ",");
-
+            // Split before checking fixed feature names. An unrelated token
+            // containing a surrogate must not hide a known duplicate polyfill.
             let unwanted_features: Vec<&str> = features_value
-                .split(',')
+                .split(|&byte| byte == b',')
+                .flat_map(|part| {
+                    let mut start = 0;
+                    memchr::memmem::find_iter(part, b"%2C").chain(std::iter::once(part.len())).map(
+                        move |end| {
+                            let feature = &part[start..end];
+                            start = end + 3;
+                            feature
+                        },
+                    )
+                })
+                .filter_map(|feature| std::str::from_utf8(feature).ok())
                 .filter(|feature| NEXT_POLYFILLED_FEATURES.contains(feature))
                 .collect();
             if !unwanted_features.is_empty() {

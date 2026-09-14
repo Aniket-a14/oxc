@@ -2,13 +2,13 @@ use std::ops::Deref;
 
 use oxc_allocator::{Address, GetAddress};
 use oxc_ast::{
-    AstKind,
+    AstKind, StaticName,
     ast::{Argument, ArrowFunctionExpression, Expression, Function},
 };
 use oxc_diagnostics::{LabeledSpan, OxcDiagnostic};
 use oxc_macros::declare_oxc_lint;
 use oxc_span::Span;
-use oxc_str::{CompactStr, Str};
+use oxc_str::{CompactStr, JSStr};
 use rustc_hash::FxHashSet;
 use schemars::JsonSchema;
 use serde_json::Value;
@@ -36,7 +36,7 @@ pub fn no_async_handlers(
     function_span: Span,
     registered_span: Option<Span>,
     name: Option<&str>,
-    endpoint: Option<&str>,
+    endpoint: Option<JSStr<'_>>,
 ) -> OxcDiagnostic {
     #[expect(clippy::cast_possible_truncation)]
     const ASYNC_LEN: u32 = "async".len() as u32;
@@ -44,7 +44,8 @@ pub fn no_async_handlers(
     // Only cover "async" in "async function (req, res) {}" or "async (req, res) => {}"
     let async_span = Span::sized(function_span.start, ASYNC_LEN);
 
-    let registration_note = endpoint.map(|endpoint| format!(" for route `{endpoint}`"));
+    let endpoint = endpoint.map(StaticName::from);
+    let registration_note = endpoint.as_ref().map(|endpoint| format!(" for route `{endpoint}`"));
     let registered_label = registration_note.as_deref().map_or_else(
         || "and is registered here".to_string(),
         |note| format!("and is registered here{note}"),
@@ -214,7 +215,7 @@ impl NoAsyncEndpointHandlers {
     fn check_endpoint_arg<'a>(
         &self,
         ctx: &LintContext<'a>,
-        endpoint: Option<Str<'a>>,
+        endpoint: Option<JSStr<'a>>,
         arg: &Expression<'a>,
     ) {
         let mut visited = FxHashSet::default();
@@ -224,7 +225,7 @@ impl NoAsyncEndpointHandlers {
     fn check_endpoint_expr<'a>(
         &self,
         ctx: &LintContext<'a>,
-        endpoint: Option<Str<'a>>,
+        endpoint: Option<JSStr<'a>>,
         id_name: Option<&str>,
         registered_at: Option<Span>,
         arg: &Expression<'a>,
@@ -299,7 +300,7 @@ impl NoAsyncEndpointHandlers {
     fn check_function<'a>(
         &self,
         ctx: &LintContext<'a>,
-        endpoint: Option<Str<'a>>,
+        endpoint: Option<JSStr<'a>>,
         registered_at: Option<Span>,
         id_name: Option<&str>,
         f: &Function<'a>,
@@ -313,18 +314,13 @@ impl NoAsyncEndpointHandlers {
             return;
         }
 
-        ctx.diagnostic(no_async_handlers(
-            f.span,
-            registered_at,
-            name,
-            endpoint.map(|endpoint| endpoint.as_str()),
-        ));
+        ctx.diagnostic(no_async_handlers(f.span, registered_at, name, endpoint));
     }
 
     fn check_arrow<'a>(
         &self,
         ctx: &LintContext<'a>,
-        endpoint: Option<Str<'a>>,
+        endpoint: Option<JSStr<'a>>,
         registered_at: Option<Span>,
         id_name: Option<&str>,
         f: &ArrowFunctionExpression<'a>,
@@ -336,12 +332,7 @@ impl NoAsyncEndpointHandlers {
             return;
         }
 
-        ctx.diagnostic(no_async_handlers(
-            f.span,
-            registered_at,
-            id_name,
-            endpoint.map(|endpoint| endpoint.as_str()),
-        ));
+        ctx.diagnostic(no_async_handlers(f.span, registered_at, id_name, endpoint));
     }
 
     fn is_allowed_name(&self, name: &str) -> bool {
@@ -435,5 +426,29 @@ fn test() {
     ];
 
     Tester::new(NoAsyncEndpointHandlers::NAME, NoAsyncEndpointHandlers::PLUGIN, pass, fail)
+        .test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr_endpoints() {
+    use crate::tester::Tester;
+
+    let mut pass = Vec::new();
+    let mut fail = Vec::new();
+    for key in [
+        "normal",
+        r"\uD800",
+        r"\ud800",
+        r"\uD801",
+        r"\uDC00",
+        r"\uD800\uDC00",
+        r"before\uD800after",
+    ] {
+        pass.push(format!(r#"app.get("/{key}", (req, res) => {{}});"#));
+        fail.push(format!(r#"app.get("/{key}", async (req, res) => {{}});"#));
+        fail.push(format!(r#"async function handler(req, res) {{}} app.get("/{key}", handler);"#));
+    }
+    Tester::new(NoAsyncEndpointHandlers::NAME, NoAsyncEndpointHandlers::PLUGIN, pass, fail)
+        .with_snapshot_suffix("jsstr")
         .test_and_snapshot();
 }

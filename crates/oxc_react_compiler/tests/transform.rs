@@ -717,3 +717,53 @@ export default Component;\n";
     assert!(output.contains("// keep: trailing"), "trailing comment lost:\n{output}");
     assert!(!output.contains("// drop: inner"), "inner comment should not be recovered:\n{output}");
 }
+
+#[test]
+fn preserves_lone_surrogates_in_jsx_text_and_property_keys() {
+    use oxc_ast::ast::StringLiteral;
+    use oxc_ast_visit::Visit;
+
+    #[derive(Default)]
+    struct Strings(Vec<Vec<u16>>);
+    impl<'a> Visit<'a> for Strings {
+        fn visit_string_literal(&mut self, literal: &StringLiteral<'a>) {
+            self.0.push(literal.value.encode_utf16().collect());
+        }
+    }
+
+    for (expression, expected) in [
+        (r"<div>&#xD800;</div>", r"\ud800"),
+        (r"<div>&#xDC00;</div>", r"\udc00"),
+        (r"<div>before&#xD800;after</div>", r"before\ud800after"),
+        (r"<div>before&amp;&#xD800;after</div>", r"before&\ud800after"),
+        (r#"<div>{({"\uD800": 1})["\uD800"]}</div>"#, r"\ud800"),
+        (r#"<div>{({"\uDC00": 1})["\uDC00"]}</div>"#, r"\udc00"),
+        (r#"<div>{"\uD800"}</div>"#, r"\ud800"),
+        (r#"<div>{({"\uD801": 1})["\uD801"]}</div>"#, r"\ud801"),
+        (r#"<div>{({"\uD800\uDC00": 1})["𐀀"]}</div>"#, "𐀀"),
+        (r#"<div>{({"normal": 1})["normal"]}</div>"#, "normal"),
+    ] {
+        let source = format!("export function Component() {{ return {expression}; }}");
+        let allocator = Allocator::new();
+        let (program, result) = transform_source(&source, SourceType::tsx(), &allocator, options());
+        assert!(!result.fatal, "{source}: {:?}", result.diagnostics);
+        assert!(result.changed, "{source}: {:?}", result.diagnostics);
+        assert!(result.diagnostics.is_empty(), "{source}: {:?}", result.diagnostics);
+        let output = Codegen::new().build(&program).code;
+        assert!(output.contains("return"), "{source}: {output}");
+        assert!(output.contains(expected), "{source}: {output}");
+        let parsed = Parser::new(&allocator, &output, SourceType::tsx()).parse();
+        assert!(parsed.diagnostics.is_empty(), "{source}: {:?}", parsed.diagnostics);
+        let expected_source = format!("\"{expected}\"");
+        let expected_expression = Parser::new(&allocator, &expected_source, SourceType::mjs())
+            .parse_expression()
+            .unwrap();
+        let oxc_ast::ast::Expression::StringLiteral(expected_literal) = expected_expression else {
+            panic!("expected a string literal");
+        };
+        let expected_units = expected_literal.value.encode_utf16().collect::<Vec<_>>();
+        let mut strings = Strings::default();
+        strings.visit_program(&parsed.program);
+        assert!(strings.0.contains(&expected_units), "{source}: {output}");
+    }
+}

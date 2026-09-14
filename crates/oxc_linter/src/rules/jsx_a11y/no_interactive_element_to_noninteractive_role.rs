@@ -90,7 +90,7 @@ impl Rule for NoInteractiveElementToNoninteractiveRole {
             return;
         };
 
-        let element_type = get_element_type(ctx, jsx_el);
+        let Some(element_type) = get_element_type(ctx, jsx_el).into_utf8() else { return };
 
         // Only check known HTML tags
         if !HTML_TAG.contains(element_type.as_ref()) {
@@ -117,8 +117,9 @@ impl Rule for NoInteractiveElementToNoninteractiveRole {
             return;
         };
 
-        let role_str = role_value.value.as_str().trim();
-        let Some(first_role) = role_str.split_whitespace().next() else {
+        let role_str = role_value.value;
+        let Some(first_role) = role_str.split_whitespace().next().and_then(oxc_str::JSStr::as_str)
+        else {
             return;
         };
 

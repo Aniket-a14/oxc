@@ -3,6 +3,27 @@ source: crates/oxc_linter/src/tester.rs
 ---
 
   ⚠ eslint(no-regex-spaces): Multiple consecutive spaces are hard to count.
+   ╭─[no_regex_spaces.tsx:1:20]
+ 1 │ new RegExp("\uD800a  b")
+   ·                    ──
+   ╰────
+  help: Use a quantifier: ` {2}`
+
+  ⚠ eslint(no-regex-spaces): Multiple consecutive spaces are hard to count.
+   ╭─[no_regex_spaces.tsx:1:20]
+ 1 │ new RegExp("\uDC00a  b")
+   ·                    ──
+   ╰────
+  help: Use a quantifier: ` {2}`
+
+  ⚠ eslint(no-regex-spaces): Multiple consecutive spaces are hard to count.
+   ╭─[no_regex_spaces.tsx:1:26]
+ 1 │ new RegExp("\uD800\uDC00a  b")
+   ·                          ──
+   ╰────
+  help: Use a quantifier: ` {2}`
+
+  ⚠ eslint(no-regex-spaces): Multiple consecutive spaces are hard to count.
    ╭─[no_regex_spaces.tsx:1:12]
  1 │ var foo = /  /;
    ·            ──

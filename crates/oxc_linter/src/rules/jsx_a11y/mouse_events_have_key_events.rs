@@ -88,7 +88,7 @@ impl Rule for MouseEventsHaveKeyEvents {
             return;
         };
 
-        let el_type = get_element_type(ctx, jsx_opening_el);
+        let Some(el_type) = get_element_type(ctx, jsx_opening_el).into_utf8() else { return };
 
         if !HTML_TAG.contains(el_type.as_ref()) {
             return;

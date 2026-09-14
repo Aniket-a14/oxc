@@ -9,7 +9,7 @@ use std::{
 
 use oxc_allocator::{Allocator, CloneIn, CloneInSemanticIds, Dummy, GetAllocator};
 
-use crate::{JSChar, Str};
+use crate::{Ident, JSChar, Str};
 
 /// An immutable JavaScript string borrowed from source text or arena memory.
 ///
@@ -78,6 +78,19 @@ pub struct JSStr<'a> {
     _marker: PhantomData<&'a [u8]>,
 }
 
+// Raw AST transfer reads the bool niche for `Option<JSStr>::None`.
+// Verify it at compile time so a compiler layout change cannot silently corrupt
+// cooked template values. Reading an uninitialized byte here fails const evaluation.
+const _: () = {
+    assert!(size_of::<Option<JSStr<'_>>>() == size_of::<JSStr<'_>>());
+    let none: Option<JSStr<'_>> = None;
+    let offset = std::mem::offset_of!(JSStr<'_>, has_lone_surrogate);
+    // SAFETY: The offset is within `none`, which has the same size as `JSStr`.
+    // Const evaluation also checks that the niche byte is initialized.
+    let niche = unsafe { (&raw const none).cast::<u8>().add(offset).read() };
+    assert!(niche == 2);
+};
+
 impl JSStr<'static> {
     /// Return the empty string without allocating.
     #[inline]
@@ -134,6 +147,89 @@ impl<'a> JSStr<'a> {
         self.len == 0
     }
 
+    /// Whether the value starts with the given UTF-8 text.
+    #[inline]
+    pub fn starts_with(self, prefix: &str) -> bool {
+        self.as_bytes().starts_with(prefix.as_bytes())
+    }
+
+    /// Whether the value ends with the given UTF-8 text.
+    #[inline]
+    pub fn ends_with(self, suffix: &str) -> bool {
+        self.as_bytes().ends_with(suffix.as_bytes())
+    }
+
+    /// Whether the value contains the given UTF-8 text.
+    ///
+    /// UTF-8 and WTF-8 are self-synchronizing, so a UTF-8 byte sequence cannot
+    /// match inside another code point, including a lone surrogate.
+    #[inline]
+    pub fn contains(self, needle: &str) -> bool {
+        memchr::memmem::find(self.as_bytes(), needle.as_bytes()).is_some()
+    }
+
+    /// Compare strings ignoring ASCII letter case, preserving all other code points.
+    #[inline]
+    pub fn eq_ignore_ascii_case(self, other: Self) -> bool {
+        self.as_bytes().eq_ignore_ascii_case(other.as_bytes())
+    }
+
+    /// Split around the first occurrence of a UTF-8 delimiter.
+    pub fn split_once(self, delimiter: &str) -> Option<(Self, Self)> {
+        let index = memchr::memmem::find(self.as_bytes(), delimiter.as_bytes())?;
+        Some(self.split_around(index, delimiter.len()))
+    }
+
+    /// Split around the last occurrence of a UTF-8 delimiter.
+    pub fn rsplit_once(self, delimiter: &str) -> Option<(Self, Self)> {
+        let index = memchr::memmem::rfind(self.as_bytes(), delimiter.as_bytes())?;
+        Some(self.split_around(index, delimiter.len()))
+    }
+
+    fn split_around(self, index: usize, delimiter_len: usize) -> (Self, Self) {
+        let bytes = self.as_bytes();
+        let part = |bytes: &'a [u8]| {
+            let has_lone = self.has_lone_surrogate()
+                && (JSChars { remaining: bytes }).any(|ch| ch.to_char().is_none());
+            // SAFETY: UTF-8 delimiters match only at WTF-8 code point boundaries.
+            // A contiguous subsequence of canonical WTF-8 is canonical; its size
+            // is bounded by the original string, and its surrogate flag is exact.
+            unsafe { Self::from_bytes_unchecked(bytes, has_lone) }
+        };
+        (part(&bytes[..index]), part(&bytes[index + delimiter_len..]))
+    }
+
+    /// Split at Unicode whitespace, as with [`str::split_whitespace`].
+    /// Lone surrogates are preserved as non-whitespace code points.
+    pub fn split_whitespace(self) -> impl FusedIterator<Item = Self> + Clone + 'a {
+        let mut chars = JSChars { remaining: self.as_bytes() };
+        std::iter::from_fn(move || {
+            let (bytes, mut has_lone) = loop {
+                let bytes = chars.remaining;
+                let ch = chars.next()?;
+                if !ch.to_char().is_some_and(char::is_whitespace) {
+                    break (bytes, ch.is_surrogate());
+                }
+            };
+            let mut len = bytes.len();
+            loop {
+                let remaining = chars.remaining;
+                let Some(ch) = chars.next() else { break };
+                if ch.to_char().is_some_and(char::is_whitespace) {
+                    len -= remaining.len();
+                    break;
+                }
+                has_lone |= ch.is_surrogate();
+            }
+            // SAFETY: Both ends are WTF-8 code point boundaries from `JSChars`.
+            // A contiguous subsequence remains canonical and within the original
+            // length/lifetime bounds. Every included code point was checked for
+            // surrogates, so the flag is exact.
+            Some(unsafe { Self::from_bytes_unchecked(&bytes[..len], has_lone) })
+        })
+        .fuse()
+    }
+
     /// Return whether the string contains a lone surrogate, in O(1).
     #[inline]
     pub const fn has_lone_surrogate(self) -> bool {
@@ -163,6 +259,15 @@ impl<'a> JSStr<'a> {
     #[inline]
     pub fn encode_utf16(self) -> impl FusedIterator<Item = u16> + Clone + 'a {
         EncodeUtf16 { chars: JSChars { remaining: self.as_bytes() }, pending: 0 }
+    }
+
+    /// Borrow the canonical WTF-8 encoding.
+    ///
+    /// These bytes may not be UTF-8. Use [`as_str`](Self::as_str) when a consumer
+    /// requires UTF-8, and [`chars`](Self::chars) to inspect JavaScript code points.
+    #[inline]
+    pub fn as_wtf8(self) -> &'a [u8] {
+        self.as_bytes()
     }
 
     #[inline]
@@ -213,6 +318,13 @@ impl<'a> From<&'a str> for JSStr<'a> {
 impl<'a> From<Str<'a>> for JSStr<'a> {
     #[inline]
     fn from(value: Str<'a>) -> Self {
+        Self::from(value.as_str())
+    }
+}
+
+impl<'a> From<Ident<'a>> for JSStr<'a> {
+    #[inline]
+    fn from(value: Ident<'a>) -> Self {
         Self::from(value.as_str())
     }
 }

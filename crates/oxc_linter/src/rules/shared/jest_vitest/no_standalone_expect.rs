@@ -203,9 +203,10 @@ fn is_var_declarator_or_test_block<'a>(
     match node.kind() {
         AstKind::VariableDeclarator(_) => return true,
         AstKind::CallExpression(call_expr) => {
-            let node_name = get_node_name(&call_expr.callee);
+            let node_name = get_node_name(&call_expr.callee, ctx.allocator());
 
-            if additional_test_block_functions.contains(&node_name) {
+            if additional_test_block_functions.iter().any(|expected| node_name == expected.as_str())
+            {
                 return true;
             }
 

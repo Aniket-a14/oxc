@@ -52,7 +52,7 @@ impl Rule for PreferImportFromVue {
         let records = ctx.module_record();
 
         for entry in &records.import_entries {
-            if VUE_MODULES.contains(&entry.module_request.name.as_str()) {
+            if entry.module_request.name.as_str().is_some_and(|name| VUE_MODULES.contains(&name)) {
                 ctx.diagnostic_with_fix(
                     prefer_import_from_vue_diagnostic(entry.module_request.span),
                     |fixer| fixer.replace(entry.module_request.span, "'vue'".to_string()),
@@ -64,7 +64,7 @@ impl Rule for PreferImportFromVue {
             let Some(name) = &entry.module_request else {
                 continue;
             };
-            if VUE_MODULES.contains(&name.name.as_str()) {
+            if name.name.as_str().is_some_and(|name| VUE_MODULES.contains(&name)) {
                 ctx.diagnostic_with_fix(prefer_import_from_vue_diagnostic(name.span), |fixer| {
                     fixer.replace(name.span, "'vue'".to_string())
                 });
@@ -75,7 +75,7 @@ impl Rule for PreferImportFromVue {
             let Some(name) = &entry.module_request else {
                 continue;
             };
-            if VUE_MODULES.contains(&name.name.as_str()) {
+            if name.name.as_str().is_some_and(|name| VUE_MODULES.contains(&name)) {
                 ctx.diagnostic_with_fix(prefer_import_from_vue_diagnostic(name.span), |fixer| {
                     fixer.replace(name.span, "'vue'".to_string())
                 });

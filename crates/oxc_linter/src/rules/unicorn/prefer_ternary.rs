@@ -299,9 +299,10 @@ fn is_same_assignment_target(
     if let (Some(left_member), Some(right_member)) =
         (left.as_member_expression(), right.as_member_expression())
     {
-        if let (Some(left_name), Some(right_name)) =
-            (member_static_property_name(left_member), member_static_property_name(right_member))
-        {
+        if let (Some(left_name), Some(right_name)) = (
+            member_static_property_name(left_member, ctx.allocator()),
+            member_static_property_name(right_member, ctx.allocator()),
+        ) {
             return left_name == right_name
                 && is_same_expression(
                     left_member.object().get_inner_expression(),
@@ -319,16 +320,19 @@ fn is_same_assignment_target(
     }
 }
 
-fn member_static_property_name(member: &MemberExpression<'_>) -> Option<String> {
+fn member_static_property_name<'a>(
+    member: &MemberExpression<'a>,
+    allocator: &'a oxc_allocator::Allocator,
+) -> Option<oxc_str::JSStr<'a>> {
     if let Some(name) = member.static_property_name() {
-        return Some(name.to_string());
+        return Some(name);
     }
 
     let MemberExpression::ComputedMemberExpression(computed) = member else {
         return None;
     };
 
-    static_string_value(computed.expression.get_inner_expression())
+    static_string_value(computed.expression.get_inner_expression(), allocator)
 }
 
 #[test]
@@ -1659,4 +1663,18 @@ fn test() {
     ];
 
     Tester::new(PreferTernary::NAME, PreferTernary::PLUGIN, pass, fail).test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr() {
+    use crate::tester::Tester;
+    let pass = vec![r#"if (x) {o["\uD800"] = 1;} else {o["\uD801"] = 2;}"#];
+    let fail = vec![
+        r#"if (x) {o["\uD800"] = 1;} else {o["\ud800"] = 2;}"#,
+        r#"if (x) {o["a" + "\uDC00"] = 1;} else {o[`a\udc00`] = 2;}"#,
+    ];
+    Tester::new(PreferTernary::NAME, PreferTernary::PLUGIN, pass, fail)
+        .with_snapshot_suffix("jsstr")
+        .intentionally_allow_no_fix_tests()
+        .test_and_snapshot();
 }

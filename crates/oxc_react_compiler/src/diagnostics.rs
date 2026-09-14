@@ -1885,7 +1885,7 @@ pub fn suppression(reason: &str, description: String, span: Span) -> OxcDiagnost
 }
 
 #[cold]
-pub fn capitalized_call(name: &str, span: Option<Span>) -> OxcDiagnostic {
+pub fn capitalized_call(name: impl std::fmt::Display, span: Option<Span>) -> OxcDiagnostic {
     diagnostic(ErrorCategory::CapitalizedCalls, "Capitalized function called without JSX")
         .with_help(format!(
             "Render `{name}` with JSX if it is a component; otherwise rename it to start with a lowercase letter or allowlist it in the compiler configuration"

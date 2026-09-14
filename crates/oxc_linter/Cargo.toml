@@ -55,6 +55,7 @@ cow-utils = { workspace = true }
 fast-glob = { workspace = true }
 ignore = { workspace = true }
 indexmap = { workspace = true, features = ["rayon"] }
+hashbrown = { workspace = true }
 itertools = { workspace = true }
 javascript-globals = { workspace = true }
 json-strip-comments = { workspace = true }

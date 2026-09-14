@@ -12,6 +12,7 @@ use oxc_ast::{
 };
 use oxc_semantic::AstNode;
 use oxc_span::Span;
+use oxc_str::JSStr;
 
 use crate::{
     context::LintContext,
@@ -144,7 +145,13 @@ pub fn parse_jest_fn_call<'a>(
         let is_vitest = ctx.frameworks().is_vitest();
         if is_jest || is_vitest {
             let mut call_chains = Vec::from([Cow::Borrowed(name)]);
-            call_chains.extend(members.iter().filter_map(KnownMemberExpressionProperty::name));
+            // Every segment must match a known UTF-8 Jest/Vitest chain. Dropping
+            // an unrepresentable segment could turn an unrelated call into `test()`.
+            let member_names = members
+                .iter()
+                .map(|member| member.name().and_then(JSStr::as_str).map(Cow::Borrowed))
+                .collect::<Option<Vec<_>>>()?;
+            call_chains.extend(member_names);
 
             match (is_jest, is_vitest) {
                 (true, true) => {
@@ -493,21 +500,15 @@ pub struct KnownMemberExpressionProperty<'a> {
 }
 
 impl<'a> KnownMemberExpressionProperty<'a> {
-    pub fn name(&self) -> Option<Cow<'a, str>> {
+    pub fn name(&self) -> Option<JSStr<'a>> {
         match &self.element {
             MemberExpressionElement::Expression(expr) => match expr {
-                Expression::Identifier(ident) => Some(Cow::Borrowed(ident.name.as_str())),
-                Expression::StringLiteral(string_literal) => {
-                    Some(Cow::Borrowed(string_literal.value.as_str()))
-                }
-                Expression::TemplateLiteral(template_literal) => Some(Cow::Borrowed(
-                    template_literal.single_quasi().expect("get string content").as_str(),
-                )),
+                Expression::Identifier(ident) => Some(ident.name.into()),
+                Expression::StringLiteral(literal) => Some(literal.value),
+                Expression::TemplateLiteral(template) => template.single_quasi(),
                 _ => None,
             },
-            MemberExpressionElement::IdentName(ident_name) => {
-                Some(Cow::Borrowed(ident_name.name.as_str()))
-            }
+            MemberExpressionElement::IdentName(ident) => Some(ident.name.into()),
         }
     }
 
@@ -520,8 +521,8 @@ impl<'a> KnownMemberExpressionProperty<'a> {
     }
 
     pub fn is_name_in_modifiers(&self, modifiers: &[ModifierName]) -> bool {
-        self.name().is_some_and(|name| {
-            if let Some(modifier_name) = ModifierName::from(name.as_ref()) {
+        self.name().and_then(JSStr::as_str).is_some_and(|name| {
+            if let Some(modifier_name) = ModifierName::from(name) {
                 return modifiers.contains(&modifier_name);
             }
             false

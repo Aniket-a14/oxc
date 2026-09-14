@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use oxc_str::{JSStr, JSStrBuilder};
 
 use oxc_ast::{
     AstKind,
@@ -118,11 +118,14 @@ impl Rule for AnchorAmbiguousText {
             return;
         };
 
+        // Normalization cannot remove a lone surrogate, so it cannot equal a
+        // configured UTF-8 phrase. Keep that decision after accessible-text selection.
+        let Some(text) = text.as_str() else { return };
         if text.trim() == "" {
             return;
         }
 
-        let text = normalize_str(&text);
+        let text = normalize_str(text);
 
         if self.words.contains(&text) {
             ctx.diagnostic(anchor_has_ambiguous_text(jsx_el.span, &text));
@@ -158,14 +161,11 @@ fn normalize_str(text: &str) -> CompactStr {
 }
 
 // https://github.com/jsx-eslint/eslint-plugin-jsx-a11y/blob/65c9338c62c558d3c1c2dbf5ecc55cf04dbfe80c/src/util/getAccessibleChildText.js#L31
-fn get_accessible_text<'a, 'b>(
-    jsx_el: &'b JSXElement<'a>,
-    ctx: &LintContext<'a>,
-) -> Option<Cow<'b, str>> {
+fn get_accessible_text<'a>(jsx_el: &JSXElement<'a>, ctx: &LintContext<'a>) -> Option<JSStr<'a>> {
     if let Some(aria_label) = has_jsx_prop_ignore_case(&jsx_el.opening_element, "aria-label")
         && let Some(label_text) = get_string_literal_prop_value(aria_label)
     {
-        return Some(Cow::Borrowed(label_text));
+        return Some(label_text);
     }
 
     let name = get_element_type(ctx, &jsx_el.opening_element);
@@ -173,24 +173,30 @@ fn get_accessible_text<'a, 'b>(
         && let Some(alt_text) = has_jsx_prop_ignore_case(&jsx_el.opening_element, "alt")
         && let Some(text) = get_string_literal_prop_value(alt_text)
     {
-        return Some(Cow::Borrowed(text));
+        return Some(text);
     }
 
     if is_hidden_from_screen_reader(ctx, &jsx_el.opening_element) {
         return None;
     }
 
-    let text: Vec<Cow<'b, str>> = jsx_el
-        .children
-        .iter()
-        .filter_map(|child| match child {
+    let mut text = JSStrBuilder::new_in(ctx.allocator());
+    let mut first = true;
+    for child in &jsx_el.children {
+        let value = match child {
             JSXChild::Element(child_el) => get_accessible_text(child_el, ctx),
-            JSXChild::Text(text_el) => Some(Cow::Borrowed(text_el.value.as_str())),
+            JSXChild::Text(text_el) => Some(text_el.value.into()),
             _ => None,
-        })
-        .collect();
-
-    Some(Cow::Owned(text.join(" ")))
+        };
+        if let Some(value) = value {
+            if !first {
+                text.push(' ');
+            }
+            text.push_js_str(value);
+            first = false;
+        }
+    }
+    Some(text.into_js_str())
 }
 
 #[test]

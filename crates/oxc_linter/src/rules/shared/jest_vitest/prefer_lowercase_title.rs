@@ -1,7 +1,9 @@
 use oxc_ast::{AstKind, ast::Argument};
+use oxc_ast::{ast::StringLiteral, builder::AstBuilder};
+use oxc_codegen::{Codegen, CodegenOptions, Context, Gen};
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_span::Span;
-use oxc_str::CompactStr;
+use oxc_str::{CompactStr, JSStr, JSStrBuilder};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -13,7 +15,7 @@ use crate::{
     },
 };
 
-fn prefer_lowercase_title_diagnostic(title: &str, span: Span) -> OxcDiagnostic {
+fn prefer_lowercase_title_diagnostic(title: impl std::fmt::Debug, span: Span) -> OxcDiagnostic {
     OxcDiagnostic::warn("Enforce lowercase test names")
         .with_help(format!("`{title:?}`s should begin with lowercase"))
         .with_label(span)
@@ -186,16 +188,62 @@ impl PreferLowercaseTitleConfig {
         };
 
         if let Argument::StringLiteral(string_expr) = arg {
-            self.lint_string(ctx, string_expr.value.as_str(), string_expr.span);
+            self.lint_string(ctx, string_expr.value, string_expr.span);
         } else if let Argument::TemplateLiteral(template_expr) = arg {
             let Some(template_string) = template_expr.single_quasi() else {
                 return;
             };
-            self.lint_string(ctx, template_string.as_str(), template_expr.span);
+            self.lint_string(ctx, template_string, template_expr.span);
         }
     }
 
-    fn lint_string<'a>(&self, ctx: &LintContext<'a>, literal: &'a str, span: Span) {
+    fn lint_string<'a>(&self, ctx: &LintContext<'a>, literal: JSStr<'a>, span: Span) {
+        if let Some(literal) = literal.as_str() {
+            self.lint_utf8_string(ctx, literal, span);
+            return;
+        }
+        if self.allowed_prefixes.iter().any(|prefix| literal.starts_with(prefix.as_str())) {
+            return;
+        }
+        let should_report = if self.lowercase_first_character_only {
+            literal
+                .chars()
+                .next()
+                .and_then(oxc_str::JSChar::to_char)
+                .is_some_and(|ch| ch.is_ascii_uppercase())
+        } else {
+            literal.as_wtf8().iter().any(u8::is_ascii_uppercase)
+        };
+        if !should_report {
+            return;
+        }
+        ctx.diagnostic_with_fix(prefer_lowercase_title_diagnostic(literal, span), |fixer| {
+            let mut builder = JSStrBuilder::with_capacity_in(literal.len(), ctx.allocator());
+            for (index, ch) in literal.chars().enumerate() {
+                if (!self.lowercase_first_character_only || index == 0)
+                    && let Some(ch) = ch.to_char()
+                {
+                    builder.push(ch.to_ascii_lowercase());
+                } else {
+                    builder.push_js_char(ch);
+                }
+            }
+            let literal = StringLiteral::new(
+                span,
+                builder.into_js_str(),
+                None,
+                &AstBuilder::new(ctx.allocator()),
+            );
+            let mut codegen = Codegen::new().with_options(CodegenOptions {
+                single_quote: ctx.source_range(span).starts_with('\''),
+                ..CodegenOptions::default()
+            });
+            literal.print(&mut codegen, Context::empty());
+            fixer.replace(span, codegen.into_source_text())
+        });
+    }
+
+    fn lint_utf8_string<'a>(&self, ctx: &LintContext<'a>, literal: &'a str, span: Span) {
         if literal.is_empty()
             || self.allowed_prefixes.iter().any(|name| literal.starts_with(name.as_str()))
         {

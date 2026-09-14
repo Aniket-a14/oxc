@@ -1,4 +1,4 @@
-use std::{borrow::Cow, fmt::Write};
+use std::fmt::Write;
 
 use itertools::Itertools;
 use schemars::{
@@ -9,13 +9,13 @@ use serde::{Deserialize, de};
 use serde_json::Value;
 
 use oxc_ast::{
-    AstKind,
+    AstKind, StaticName,
     ast::{AssignmentTargetProperty, Expression, PropertyKey, match_expression},
 };
 use oxc_diagnostics::OxcDiagnostic;
 use oxc_macros::declare_oxc_lint;
 use oxc_span::{GetSpan, Span};
-use oxc_str::CompactStr;
+use oxc_str::{CompactStr, JSStr};
 
 use crate::{AstNode, context::LintContext, rule::Rule};
 
@@ -265,7 +265,7 @@ impl Rule for NoRestrictedProperties {
                     expression.object.get_identifier_reference().map(|ident| ident.name.as_str());
                 self.check_property_access(
                     object_name,
-                    Some(expression.property.name.as_str()),
+                    Some(expression.property.name.into()),
                     PropertyAccessSpans {
                         object: Some(expression.object.span()),
                         property: expression.property.span,
@@ -280,7 +280,7 @@ impl Rule for NoRestrictedProperties {
                 let property_name = expression_property_name(&expression.expression);
                 self.check_property_access(
                     object_name,
-                    property_name.as_deref(),
+                    property_name.as_ref().map(StaticName::as_js_str),
                     PropertyAccessSpans {
                         object: Some(expression.object.span()),
                         property: expression.expression.span(),
@@ -301,7 +301,7 @@ impl Rule for NoRestrictedProperties {
                 let properties = target.properties.iter().filter_map(|p| {
                     let (property_name, span) = match p {
                         AssignmentTargetProperty::AssignmentTargetPropertyIdentifier(ident) => {
-                            (Cow::Borrowed(ident.binding.name.as_str()), ident.binding.span)
+                            (ident.binding.name.into(), ident.binding.span)
                         }
                         AssignmentTargetProperty::AssignmentTargetPropertyProperty(prop) => {
                             property_key_name_and_span(&prop.name)?
@@ -314,7 +314,7 @@ impl Rule for NoRestrictedProperties {
                 for (property_name, span) in properties {
                     self.check_property_access(
                         object_name,
-                        Some(property_name.as_ref()),
+                        Some(property_name.as_js_str()),
                         PropertyAccessSpans { object: None, property: span, access: span },
                         ctx,
                     );
@@ -352,7 +352,7 @@ impl Rule for NoRestrictedProperties {
                 for (property_name, span) in properties {
                     self.check_property_access(
                         object_name,
-                        Some(property_name.as_ref()),
+                        Some(property_name.as_js_str()),
                         PropertyAccessSpans { object: None, property: span, access: span },
                         ctx,
                     );
@@ -367,7 +367,7 @@ impl NoRestrictedProperties {
     fn check_property_access(
         &self,
         object_name: Option<&str>,
-        property_name: Option<&str>,
+        property_name: Option<JSStr<'_>>,
         spans: PropertyAccessSpans,
         ctx: &LintContext<'_>,
     ) {
@@ -375,7 +375,7 @@ impl NoRestrictedProperties {
             let object_matches =
                 property.object.as_deref().is_none_or(|name| object_name == Some(name));
             let property_matches = match property.property.as_deref() {
-                Some(name) => Some(name) == property_name,
+                Some(name) => property_name.is_some_and(|property| property == name),
                 None if property.allow_properties.is_some() => property_name.is_some(),
                 None => true,
             };
@@ -384,7 +384,9 @@ impl NoRestrictedProperties {
                     .is_some_and(|obj_name| allow.iter().any(|check| check.as_str() == obj_name))
             });
             let property_allowed = property.allow_properties.as_deref().is_some_and(|allow| {
-                allow.iter().any(|check| Some(check.as_str()) == property_name)
+                allow
+                    .iter()
+                    .any(|check| property_name.is_some_and(|property| property == check.as_str()))
             });
 
             if object_matches && property_matches && !object_allowed && !property_allowed {
@@ -399,32 +401,28 @@ impl NoRestrictedProperties {
     }
 }
 
-fn expression_property_name<'a>(expression: &'a Expression<'a>) -> Option<Cow<'a, str>> {
+fn expression_property_name<'a>(expression: &'a Expression<'a>) -> Option<StaticName<'a>> {
     match expression {
-        Expression::StringLiteral(literal) => Some(Cow::Borrowed(literal.value.as_str())),
-        Expression::RegExpLiteral(literal) => literal.raw.map(|r| Cow::Borrowed(r.as_str())),
-        Expression::NumericLiteral(literal) => Some(Cow::Owned(literal.value.to_string())),
-        Expression::BigIntLiteral(literal) => Some(Cow::Borrowed(literal.value.as_str())),
+        Expression::StringLiteral(literal) => Some(literal.value.into()),
+        Expression::RegExpLiteral(literal) => literal.raw.map(|r| r.as_str().into()),
+        Expression::NumericLiteral(literal) => Some(StaticName::Owned(literal.value.to_string())),
+        Expression::BigIntLiteral(literal) => Some(literal.value.as_str().into()),
         Expression::BooleanLiteral(literal) => {
-            Some(Cow::Borrowed(if literal.value { "true" } else { "false" }))
+            Some(StaticName::from(if literal.value { "true" } else { "false" }))
         }
-        Expression::NullLiteral(_) => Some(Cow::Borrowed("null")),
+        Expression::NullLiteral(_) => Some(StaticName::from("null")),
         Expression::TemplateLiteral(literal) if literal.quasis.len() == 1 => {
-            literal.quasis[0].value.cooked.map(|cooked| Cow::Borrowed(cooked.as_str()))
+            literal.quasis[0].value.cooked.map(StaticName::from)
         }
         _ => None,
     }
 }
 
-fn property_key_name_and_span<'a>(key: &'a PropertyKey<'a>) -> Option<(Cow<'a, str>, Span)> {
+fn property_key_name_and_span<'a>(key: &'a PropertyKey<'a>) -> Option<(StaticName<'a>, Span)> {
     match key {
-        PropertyKey::Identifier(ident) => Some((Cow::Borrowed(ident.name.as_str()), ident.span)),
-        PropertyKey::StaticIdentifier(ident) => {
-            Some((Cow::Borrowed(ident.name.as_str()), ident.span))
-        }
-        PropertyKey::PrivateIdentifier(ident) => {
-            Some((Cow::Borrowed(ident.name.as_str()), ident.span))
-        }
+        PropertyKey::Identifier(ident) => Some((ident.name.into(), ident.span)),
+        PropertyKey::StaticIdentifier(ident) => Some((ident.name.into(), ident.span)),
+        PropertyKey::PrivateIdentifier(ident) => Some((ident.name.into(), ident.span)),
         match_expression!(PropertyKey) => {
             expression_property_name(key.to_expression()).map(|name| (name, key.span()))
         }
@@ -798,4 +796,34 @@ fn invalid_configs_error_in_from_configuration() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn test_jsstr_consumers() {
+    use crate::{rule::RuleMeta, tester::Tester};
+    let pass = vec![
+        (
+            r#"legacy["safe"];"#,
+            Some(serde_json::json!([{"object":"legacy","allowProperties":["safe"]}])),
+        ),
+        (
+            r#"other["\uD800"];"#,
+            Some(serde_json::json!([{"object":"legacy","allowProperties":["safe"]}])),
+        ),
+    ];
+    let fail = vec![
+        (
+            r#"legacy["\uD800"];"#,
+            Some(serde_json::json!([{"object":"legacy","allowProperties":["safe"]}])),
+        ),
+        (
+            r#"const {"x\uDC00": x} = legacy;"#,
+            Some(serde_json::json!([{"object":"legacy","allowProperties":["safe"]}])),
+        ),
+        (
+            r#"({"\ud800": x} = legacy);"#,
+            Some(serde_json::json!([{"object":"legacy","allowProperties":["safe"]}])),
+        ),
+    ];
+    Tester::new(NoRestrictedProperties::NAME, NoRestrictedProperties::PLUGIN, pass, fail).test();
 }

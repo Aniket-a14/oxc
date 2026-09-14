@@ -55,7 +55,7 @@ fn aria_unsupported_elements_diagnostic(span: Span, attr_name: &str) -> OxcDiagn
 impl Rule for AriaUnsupportedElements {
     fn run<'a>(&self, node: &AstNode<'a>, ctx: &LintContext<'a>) {
         if let AstKind::JSXOpeningElement(jsx_el) = node.kind() {
-            let el_type = get_element_type(ctx, jsx_el);
+            let Some(el_type) = get_element_type(ctx, jsx_el).into_utf8() else { return };
             if RESERVED_HTML_TAG.contains(&el_type.as_ref()) {
                 for attr in &jsx_el.attributes {
                     let attr = match attr {

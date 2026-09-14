@@ -107,11 +107,11 @@ impl Rule for NoRedundantRoles {
             return;
         };
 
-        let component = get_element_type(ctx, jsx_el);
+        let Some(component) = get_element_type(ctx, jsx_el).into_utf8() else { return };
         if let Some(JSXAttributeItem::Attribute(attr)) = has_jsx_prop_ignore_case(jsx_el, "role")
             && let Some(JSXAttributeValue::StringLiteral(role_values)) = &attr.value
         {
-            for role in role_values.value.split_whitespace() {
+            for role in role_values.value.split_whitespace().filter_map(oxc_str::JSStr::as_str) {
                 if let Some(implicit_role) = get_redundant_implicit_role(&component, jsx_el, role)
                     && !self.is_allowed_redundant_role(&component, implicit_role)
                 {
@@ -169,7 +169,7 @@ fn get_redundant_implicit_role(
 fn get_img_implicit_role(jsx_el: &JSXOpeningElement) -> Option<&'static str> {
     if has_jsx_prop_ignore_case(jsx_el, "alt")
         .and_then(get_string_literal_prop_value)
-        .is_some_and(str::is_empty)
+        .is_some_and(oxc_str::JSStr::is_empty)
     {
         return None;
     }
@@ -198,12 +198,12 @@ fn get_select_implicit_role(jsx_el: &JSXOpeningElement) -> &'static str {
 
 fn get_static_string_prop_value<'a>(item: &'a JSXAttributeItem<'_>) -> Option<&'a str> {
     match get_prop_value(item)? {
-        JSXAttributeValue::StringLiteral(lit) => Some(lit.value.as_str()),
+        JSXAttributeValue::StringLiteral(lit) => lit.value.as_str(),
         JSXAttributeValue::ExpressionContainer(container) => {
             let Expression::StringLiteral(lit) = container.expression.as_expression()? else {
                 return None;
             };
-            Some(lit.value.as_str())
+            lit.value.as_str()
         }
         _ => None,
     }

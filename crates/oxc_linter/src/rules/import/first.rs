@@ -84,10 +84,10 @@ declare_oxc_lint!(
     short_description = "Forbids any non-import statements before imports except directives.",
 );
 
-fn is_relative_path(path: &str) -> bool {
+fn is_relative_path(path: oxc_str::JSStr) -> bool {
     // A path is considered relative if it starts with "/", "./", or "../"
     // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/import#module_specifier_resolution
-    path.starts_with("./") || path.starts_with("../") || path.starts_with('/')
+    path.starts_with("./") || path.starts_with("../") || path.starts_with("/")
 }
 
 /// <https://github.com/import-js/eslint-plugin-import/blob/v2.29.1/docs/rules/first.md>
@@ -107,7 +107,7 @@ impl Rule for First {
                 Statement::TSImportEqualsDeclaration(decl) => match &decl.module_reference {
                     TSModuleReference::ExternalModuleReference(mod_ref) => {
                         if matches!(self.0, AbsoluteFirst::AbsoluteFirst) {
-                            if is_relative_path(mod_ref.expression.value.as_str()) {
+                            if is_relative_path(mod_ref.expression.value) {
                                 any_relative = true;
                             } else if any_relative {
                                 ctx.diagnostic(absolute_first_diagnostic(mod_ref.expression.span));
@@ -122,7 +122,7 @@ impl Rule for First {
                 },
                 Statement::ImportDeclaration(decl) => {
                     if matches!(self.0, AbsoluteFirst::AbsoluteFirst) {
-                        if is_relative_path(decl.source.value.as_str()) {
+                        if is_relative_path(decl.source.value) {
                             any_relative = true;
                         } else if any_relative {
                             ctx.diagnostic(absolute_first_diagnostic(decl.source.span));
@@ -239,4 +239,18 @@ fn test() {
         .change_rule_path("index.ts")
         .with_import_plugin(true)
         .test_and_snapshot();
+}
+
+#[test]
+fn test_jsstr_consumers() {
+    use crate::{rule::RuleMeta, tester::Tester};
+    let pass = vec![(
+        r#"import "x\uD800"; import "./x\uDC00";"#,
+        Some(serde_json::json!(["absolute-first"])),
+    )];
+    let fail = vec![(
+        r#"import "./x\uD800"; import "x\uDC00";"#,
+        Some(serde_json::json!(["absolute-first"])),
+    )];
+    Tester::new(First::NAME, First::PLUGIN, pass, fail).test();
 }

@@ -396,7 +396,8 @@ fn get_identifier_and_matcher_to_be_expected<'a>(
         .members
         .get(matcher_index)
         .and_then(KnownMemberExpressionProperty::name)
-        .map(|matcher_name| MatcherKind::from(matcher_name.as_ref()))?;
+        .and_then(oxc_str::JSStr::as_str)
+        .map(MatcherKind::from)?;
 
     if !matcher.is_combinable() {
         return None;
@@ -415,7 +416,10 @@ fn is_not_modifier_member(member: &KnownMemberExpressionProperty<'_>) -> bool {
 }
 
 fn is_mock_reset_call_expression(call_expr: &CallExpression<'_>) -> bool {
-    call_expr.callee_name().is_some_and(|callee| MOCK_RESET_METHODS.contains(&callee))
+    call_expr
+        .callee_name()
+        .and_then(oxc_str::JSStr::as_str)
+        .is_some_and(|callee| MOCK_RESET_METHODS.contains(&callee))
 }
 
 /**

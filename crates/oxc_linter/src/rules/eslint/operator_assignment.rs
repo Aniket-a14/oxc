@@ -603,3 +603,25 @@ fn test() {
         .expect_fix(fix)
         .test_and_snapshot();
 }
+
+#[test]
+fn test_jsstr_member_identity() {
+    use crate::tester::Tester;
+    use cow_utils::CowUtils;
+
+    let mut pass = vec![r#"obj["\uD800"] = obj["\uD801"] + 1;"#.to_string()];
+    let mut fail = Vec::new();
+    let mut fix = Vec::new();
+    for key in ["normal", r"\uD800", r"\uDC00", r"\uD800\uDC00", r"before\uD800after"] {
+        let source = format!(r#"obj["{key}"] = obj["{}"] + 1;"#, key.cow_to_ascii_lowercase());
+        fail.push(source.clone());
+        fix.push((source, format!(r#"obj["{key}"] += 1;"#), None));
+        pass.push(format!(r#"obj["{key}"] = obj["other{key}"] + 1;"#));
+        // A private field and a surrogate property must not compare as two absent names.
+        pass.push(format!(r#"class C {{ #x; f() {{ this.#x = this["{key}"] + 1; }} }}"#));
+        pass.push(format!(r#"class C {{ #x; f() {{ this["{key}"] = this.#x + 1; }} }}"#));
+    }
+    Tester::new(OperatorAssignment::NAME, OperatorAssignment::PLUGIN, pass, fail)
+        .expect_fix(fix)
+        .test();
+}

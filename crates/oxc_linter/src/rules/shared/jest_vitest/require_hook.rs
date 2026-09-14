@@ -214,18 +214,14 @@ impl RequireHookConfig {
 
     fn check_should_report_in_hook<'a>(&self, expr: &'a Expression<'a>, ctx: &LintContext<'a>) {
         if let Expression::CallExpression(call_expr) = expr {
-            let name = get_node_name(&call_expr.callee);
+            let name = get_node_name(&call_expr.callee, ctx.allocator());
 
-            let node_name_split: Vec<&str> = name.split('.').collect();
+            let fn_type = name.split_once(".").map_or(name, |(first, _)| first);
 
-            let Some(fn_type) = node_name_split.first() else {
-                return;
-            };
-
-            if !(is_valid_vitest_call(&[fn_type])
+            if !(fn_type.as_str().is_some_and(|name| is_valid_vitest_call(&[name]))
                 || name.starts_with("jest.")
                 || name.starts_with("vi.")
-                || self.allowed_function_calls.contains(&name))
+                || self.allowed_function_calls.iter().any(|expected| name == expected.as_str()))
             {
                 ctx.diagnostic(use_hook(call_expr.span));
             }

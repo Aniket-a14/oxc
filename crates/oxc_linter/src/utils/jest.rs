@@ -1,9 +1,8 @@
 use cow_utils::CowUtils;
-use lazy_regex::Regex;
+use lazy_regex::BytesRegex as Regex;
 use smallvec::SmallVec;
-use std::borrow::Cow;
 
-use oxc_allocator::GetAddress;
+use oxc_allocator::{Allocator, GetAddress};
 use oxc_ast::{
     AstKind,
     ast::{
@@ -12,7 +11,7 @@ use oxc_ast::{
     },
 };
 use oxc_semantic::{AstNode, ReferenceId, Semantic, SymbolId};
-use oxc_str::CompactStr;
+use oxc_str::{CompactStr, JSStr, JSStrBuilder};
 
 use crate::LintContext;
 pub use crate::utils::jest::parse_jest_fn::{
@@ -233,7 +232,7 @@ fn collect_ids_referenced_to_import<'a, 'c>(
 
                 if matches!(
                     import_decl.source.value.as_str(),
-                    "@jest/globals" | "vitest" | "vite-plus/test" | "@effect/vitest"
+                    Some("@jest/globals" | "vitest" | "vite-plus/test" | "@effect/vitest")
                 ) {
                     let original = find_original_name(import_decl, name);
                     return Some(
@@ -252,7 +251,7 @@ fn find_original_name<'a>(import_decl: &'a ImportDeclaration<'a>, name: &str) ->
     import_decl.specifiers.iter().flatten().find_map(|specifier| match specifier {
         ImportDeclarationSpecifier::ImportSpecifier(import_specifier) => {
             if import_specifier.local.name.as_str() == name {
-                return Some(import_specifier.imported.name().as_str());
+                return import_specifier.imported.name().as_str();
             }
             None
         }
@@ -274,42 +273,52 @@ fn collect_ids_referenced_to_global<'c>(
 /// join name of the expression. e.g.
 /// `expect(foo).toBe(bar)`  -> "expect.toBe"
 /// `new Foo().bar` -> "Foo.bar"
-pub fn get_node_name<'a>(expr: &'a Expression<'a>) -> CompactStr {
+pub fn get_node_name<'a>(expr: &Expression<'a>, allocator: &'a Allocator) -> JSStr<'a> {
     let chain = get_node_name_vec(expr);
-    chain.join(".").into()
+    let mut name = JSStrBuilder::new_in(allocator);
+    for (index, part) in chain.into_iter().enumerate() {
+        if index != 0 {
+            name.push_str(".");
+        }
+        name.push_js_str(part);
+    }
+    name.into_js_str()
 }
 
-pub fn get_node_name_vec<'a>(expr: &'a Expression<'a>) -> SmallVec<[Cow<'a, str>; 4]> {
-    let mut chain: SmallVec<[Cow<'a, str>; 4]> = SmallVec::new();
-
+pub fn get_node_name_vec<'a>(expr: &Expression<'a>) -> SmallVec<[JSStr<'a>; 4]> {
+    let mut chain = SmallVec::new();
     match expr {
-        Expression::Identifier(ident) => chain.push(Cow::Borrowed(ident.name.as_str())),
-        Expression::StringLiteral(string_literal) => {
-            chain.push(Cow::Borrowed(&string_literal.value));
-        }
-        Expression::TemplateLiteral(template_literal) => {
-            if let Some(quasi) = template_literal.single_quasi() {
-                chain.push(Cow::Borrowed(quasi.as_str()));
+        Expression::Identifier(ident) => chain.push(ident.name.into()),
+        Expression::StringLiteral(literal) => chain.push(literal.value),
+        Expression::TemplateLiteral(template) => {
+            if let Some(quasi) = template.single_quasi() {
+                chain.push(quasi);
             }
         }
-        Expression::TaggedTemplateExpression(tagged_expr) => {
-            chain.extend(get_node_name_vec(&tagged_expr.tag));
+        Expression::TaggedTemplateExpression(tagged) => {
+            chain.extend(get_node_name_vec(&tagged.tag));
         }
-        Expression::CallExpression(call_expr) => chain.extend(get_node_name_vec(&call_expr.callee)),
+        Expression::CallExpression(call) => chain.extend(get_node_name_vec(&call.callee)),
         match_member_expression!(Expression) => {
-            let member_expr = expr.to_member_expression();
-            chain.extend(get_node_name_vec(member_expr.object()));
-            if let Some(name) = member_expr.static_property_name() {
-                chain.push(Cow::Borrowed(name));
+            let member = expr.to_member_expression();
+            chain.extend(get_node_name_vec(member.object()));
+            if let Some(name) = member.static_property_name() {
+                chain.push(name);
             }
         }
-        Expression::NewExpression(new_expr) => {
-            chain.extend(get_node_name_vec(&new_expr.callee));
-        }
+        Expression::NewExpression(expr) => chain.extend(get_node_name_vec(&expr.callee)),
         _ => {}
     }
-
     chain
+}
+
+/// Compare a dotted call name without allocating its joined spelling.
+pub fn node_name_matches(expr: &Expression<'_>, expected: &str, prefix: bool) -> bool {
+    let chain = get_node_name_vec(expr);
+    let mut bytes = chain.iter().enumerate().flat_map(|(index, name)| {
+        (index != 0).then_some(b'.').into_iter().chain(name.as_wtf8().iter().copied())
+    });
+    expected.bytes().all(|byte| bytes.next() == Some(byte)) && (prefix || bytes.next().is_none())
 }
 
 pub fn is_equality_matcher(matcher: &KnownMemberExpressionProperty) -> bool {
@@ -319,8 +328,8 @@ pub fn is_equality_matcher(matcher: &KnownMemberExpressionProperty) -> bool {
 }
 
 /// Checks if node names returned by getNodeName matches any of the given star patterns
-pub fn matches_assert_function_name(name: &str, patterns: &[Regex]) -> bool {
-    patterns.iter().any(|pattern| pattern.is_match(name))
+pub fn matches_assert_function_name(name: JSStr, patterns: &[Regex]) -> bool {
+    patterns.iter().any(|pattern| pattern.is_match(name.as_wtf8()))
 }
 
 pub fn convert_pattern(pattern: &str) -> CompactStr {
