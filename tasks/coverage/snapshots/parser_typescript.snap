@@ -7783,7 +7783,7 @@ Expect Syntax Error: tasks/coverage/typescript/tests/cases/conformance/types/wit
    ·        ──────
  6 │ export private import b = x.c;
    ╰────
-  help: No modifiers are allowed here.
+  help: Only 'export' modifier is allowed here.
 
   × 'private' modifier cannot be used here.
    ╭─[typescript/tests/cases/compiler/importDeclWithClassModifiers.ts:6:8]
@@ -7792,7 +7792,7 @@ Expect Syntax Error: tasks/coverage/typescript/tests/cases/conformance/types/wit
    ·        ───────
  7 │ export static import c = x.c;
    ╰────
-  help: No modifiers are allowed here.
+  help: Only 'export' modifier is allowed here.
 
   × 'static' modifier cannot be used here.
    ╭─[typescript/tests/cases/compiler/importDeclWithClassModifiers.ts:7:8]
@@ -7801,7 +7801,7 @@ Expect Syntax Error: tasks/coverage/typescript/tests/cases/conformance/types/wit
    ·        ──────
  8 │ var b: a;
    ╰────
-  help: No modifiers are allowed here.
+  help: Only 'export' modifier is allowed here.
 
   × TS(1029): 'export' modifier must precede 'declare' modifier.
    ╭─[typescript/tests/cases/compiler/importDeclWithDeclareModifier.ts:5:9]
@@ -7818,15 +7818,6 @@ Expect Syntax Error: tasks/coverage/typescript/tests/cases/conformance/types/wit
    · ───────
  6 │ var b: a;
    ╰────
-
-  × 'export' modifier cannot be used here.
-   ╭─[typescript/tests/cases/compiler/importDeclWithDeclareModifier.ts:5:9]
- 4 │ }
- 5 │ declare export import a = x.c;
-   ·         ──────
- 6 │ var b: a;
-   ╰────
-  help: No modifiers are allowed here.
 
   × TS(1029): 'export' modifier must precede 'declare' modifier.
    ╭─[typescript/tests/cases/compiler/importDeclWithDeclareModifierInAmbientContext.ts:6:13]
@@ -7851,15 +7842,6 @@ Expect Syntax Error: tasks/coverage/typescript/tests/cases/conformance/types/wit
    ·     ───────
  7 │     var b: a;
    ╰────
-
-  × 'export' modifier cannot be used here.
-   ╭─[typescript/tests/cases/compiler/importDeclWithDeclareModifierInAmbientContext.ts:6:13]
- 5 │     }
- 6 │     declare export import a = x.c;
-   ·             ──────
- 7 │     var b: a;
-   ╰────
-  help: No modifiers are allowed here.
 
   × TS(2309): An export assignment cannot be used in a module with other exported elements
    ╭─[typescript/tests/cases/compiler/importDeclWithExportModifierAndExportAssignment.ts:6:1]
@@ -17822,7 +17804,7 @@ Expect Syntax Error: tasks/coverage/typescript/tests/cases/conformance/types/wit
     · ────────
  35 │ accessor import {} from "x";
     ╰────
-  help: No modifiers are allowed here.
+  help: Only 'export' modifier is allowed here.
 
   × Unexpected token
     ╭─[typescript/tests/cases/conformance/classes/propertyMemberDeclarations/autoAccessorDisallowedModifiers.ts:34:17]

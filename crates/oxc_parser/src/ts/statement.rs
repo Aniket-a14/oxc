@@ -691,7 +691,7 @@ impl<'a, C: Config> ParserImpl<'a, C> {
             Kind::Import => {
                 self.verify_modifiers(
                     modifiers,
-                    ModifierKinds::none(),
+                    ModifierKinds::new([ModifierKind::Export]),
                     true,
                     |modifier, allowed| match modifier.kind {
                         ModifierKind::Declare => {
